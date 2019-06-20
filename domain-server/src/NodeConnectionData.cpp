@@ -35,7 +35,16 @@ NodeConnectionData NodeConnectionData::fromDataStream(QDataStream& dataStream, c
 
         // now the machine fingerprint
         dataStream >> newHeader.machineFingerprint;
+
+        // and the operating system type
+        dataStream >> newHeader.SystemInfo;
+
+        dataStream >> newHeader.connectReason;
+
+        dataStream >> newHeader.previousConnectionUpTime;
     }
+
+    dataStream >> newHeader.lastPingTimestamp;
     
     dataStream >> newHeader.nodeType
         >> newHeader.publicSockAddr >> newHeader.localSockAddr

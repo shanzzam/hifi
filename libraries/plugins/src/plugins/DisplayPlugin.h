@@ -27,6 +27,7 @@
 #include <SimpleMovingAverage.h>
 #include <gpu/Forward.h>
 #include "Plugin.h"
+#include "StencilMaskMode.h"
 
 class QOpenGLFramebufferObject;
 
@@ -89,6 +90,7 @@ public:
 // HMD display functionality
 // TODO move out of this file don't derive DisplayPlugin from this.  Instead use dynamic casting when
 // displayPlugin->isHmd returns true
+class RefreshRateController;
 class HmdDisplay : public StereoDisplay {
 public:
     // HMD specific methods
@@ -127,6 +129,7 @@ public:
     /// By default, all HMDs are stereo
     virtual bool isStereo() const { return isHmd(); }
     virtual bool isThrottled() const { return false; }
+
     virtual float getTargetFrameRate() const { return 1.0f; }
     virtual bool hasAsyncReprojection() const { return false; }
 
@@ -172,10 +175,6 @@ public:
         return QRect(0, 0, recommendedSize.x, recommendedSize.y);
     }
 
-    // Fetch the most recently displayed image as a QImage
-    virtual QImage getScreenshot(float aspectRatio = 0.0f) const = 0;
-    virtual QImage getSecondaryCameraScreenshot() const = 0;
-
     // will query the underlying hmd api to compute the most recent head pose
     virtual bool beginFrameRender(uint32_t frameIndex) { return true; }
 
@@ -212,14 +211,17 @@ public:
     virtual void cycleDebugOutput() {}
 
     void waitForPresent();
-    float getAveragePresentTime() { return _movingAveragePresent.average / (float)USECS_PER_MSEC; } // in msec
-
-    std::function<void(gpu::Batch&, const gpu::TexturePointer&, bool mirror)> getHUDOperator();
+    float getAveragePresentTime() { return _movingAveragePresent.average / (float)USECS_PER_MSEC; }  // in msec
 
     static const QString& MENU_PATH();
 
     // for updating plugin-related commands. Mimics the input plugin.
     virtual void pluginUpdate() = 0;
+
+    virtual std::function<void(gpu::Batch&, const gpu::TexturePointer&, bool mirror)> getHUDOperator() { return nullptr; }
+    virtual StencilMaskMode getStencilMaskMode() const { return StencilMaskMode::NONE; }
+    using StencilMaskMeshOperator = std::function<void(gpu::Batch&)>;
+    virtual StencilMaskMeshOperator getStencilMaskMeshOperator() { return nullptr; }
 
 signals:
     void recommendedFramebufferSizeChanged(const QSize& size);
@@ -230,8 +232,6 @@ protected:
     void incrementPresentCount();
 
     gpu::ContextPointer _gpuContext;
-
-    std::function<void(gpu::Batch&, const gpu::TexturePointer&, bool mirror)> _hudOperator { std::function<void(gpu::Batch&, const gpu::TexturePointer&, bool mirror)>() };
 
     MovingAverage<float, 10> _movingAveragePresent;
 

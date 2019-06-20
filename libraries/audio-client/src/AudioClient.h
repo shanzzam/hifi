@@ -181,6 +181,8 @@ public:
     bool isHeadsetPluggedIn() { return _isHeadsetPluggedIn; }
 #endif
 
+    int getNumLocalInjectors();
+
 public slots:
     void start();
     void stop();
@@ -210,13 +212,16 @@ public slots:
     void setNoiseReduction(bool isNoiseGateEnabled, bool emitSignal = true);
     bool isNoiseReductionEnabled() const { return _isNoiseGateEnabled; }
 
-    bool getLocalEcho() { return _shouldEchoLocally; }
-    void setLocalEcho(bool localEcho) { _shouldEchoLocally = localEcho; }
-    void toggleLocalEcho() { _shouldEchoLocally = !_shouldEchoLocally; }
+    void setWarnWhenMuted(bool isNoiseGateEnabled, bool emitSignal = true);
+    bool isWarnWhenMutedEnabled() const { return _warnWhenMuted; }
 
-    bool getServerEcho() { return _shouldEchoToServer; }
-    void setServerEcho(bool serverEcho) { _shouldEchoToServer = serverEcho; }
-    void toggleServerEcho() { _shouldEchoToServer = !_shouldEchoToServer; }
+    virtual bool getLocalEcho() override { return _shouldEchoLocally; }
+    virtual void setLocalEcho(bool localEcho) override { _shouldEchoLocally = localEcho; }
+    virtual void toggleLocalEcho() override { _shouldEchoLocally = !_shouldEchoLocally; }
+
+    virtual bool getServerEcho() override { return _shouldEchoToServer; }
+    virtual void setServerEcho(bool serverEcho) override { _shouldEchoToServer = serverEcho; }
+    virtual void toggleServerEcho() override { _shouldEchoToServer = !_shouldEchoToServer; }
 
     void processReceivedSamples(const QByteArray& inputBuffer, QByteArray& outputBuffer);
     void sendMuteEnvironmentPacket();
@@ -237,6 +242,10 @@ public slots:
     void setReverb(bool reverb);
     void setReverbOptions(const AudioEffectOptions* options);
 
+    void setLocalInjectorGain(float gain) { _localInjectorGain = gain; };
+    void setSystemInjectorGain(float gain) { _systemInjectorGain = gain; };
+    void setOutputGain(float gain) { _outputGain = gain; };
+
     void outputNotify();
 
     void loadSettings();
@@ -246,6 +255,7 @@ signals:
     void inputVolumeChanged(float volume);
     void muteToggled(bool muted);
     void noiseReductionChanged(bool noiseReductionEnabled);
+    void warnWhenMutedChanged(bool warnWhenMutedEnabled);
     void mutedByMixer();
     void inputReceived(const QByteArray& inputSamples);
     void inputLoudnessChanged(float loudness, bool isClipping);
@@ -330,6 +340,7 @@ private:
     QIODevice* _inputDevice;
     int _numInputCallbackBytes;
     QAudioOutput* _audioOutput;
+    std::atomic<bool> _audioOutputInitialized { false };
     QAudioFormat _desiredOutputFormat;
     QAudioFormat _outputFormat;
     int _outputFrameSize;
@@ -365,6 +376,7 @@ private:
     bool _shouldEchoLocally;
     bool _shouldEchoToServer;
     bool _isNoiseGateEnabled;
+    bool _warnWhenMuted;
 
     bool _reverb;
     AudioEffectOptions _scriptReverbOptions;
@@ -378,6 +390,7 @@ private:
     AudioSRC* _inputToNetworkResampler;
     AudioSRC* _networkToOutputResampler;
     AudioSRC* _localToOutputResampler;
+    AudioSRC* _loopbackResampler;
 
     // for network audio (used by network audio thread)
     int16_t _networkScratchBuffer[AudioConstants::NETWORK_FRAME_SAMPLES_AMBISONIC];
@@ -386,8 +399,12 @@ private:
     int _outputPeriod { 0 };
     float* _outputMixBuffer { NULL };
     int16_t* _outputScratchBuffer { NULL };
+    std::atomic<float> _outputGain { 1.0f };
+    float _lastOutputGain { 1.0f };
 
     // for local audio (used by audio injectors thread)
+    std::atomic<float> _localInjectorGain { 1.0f };
+    std::atomic<float> _systemInjectorGain { 1.0f };
     float _localMixBuffer[AudioConstants::NETWORK_FRAME_SAMPLES_STEREO];
     int16_t _localScratchBuffer[AudioConstants::NETWORK_FRAME_SAMPLES_AMBISONIC];
     float* _localOutputMixBuffer { NULL };

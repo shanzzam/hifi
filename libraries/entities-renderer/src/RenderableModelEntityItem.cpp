@@ -181,9 +181,11 @@ void RenderableModelEntityItem::updateModelBounds() {
         updateRenderItems = true;
     }
 
-    if (model->getScaleToFitDimensions() != getScaledDimensions() ||
-            model->getRegistrationPoint() != getRegistrationPoint() ||
-            !model->getIsScaledToFit()) {
+    bool overridingModelTransform = model->isOverridingModelTransformAndOffset();
+    if (!overridingModelTransform &&
+        (model->getScaleToFitDimensions() != getScaledDimensions() ||
+         model->getRegistrationPoint() != getRegistrationPoint() ||
+         !model->getIsScaledToFit())) {
         // The machinery for updateModelBounds will give existing models the opportunity to fix their
         // translation/rotation/scale/registration.  The first two are straightforward, but the latter two
         // have guards to make sure they don't happen after they've already been set.  Here we reset those guards.
@@ -305,10 +307,6 @@ void RenderableModelEntityItem::setShapeType(ShapeType type) {
 }
 
 void RenderableModelEntityItem::setCompoundShapeURL(const QString& url) {
-    // because the caching system only allows one Geometry per url, and because this url might also be used
-    // as a visual model, we need to change this url in some way.  We add a "collision-hull" query-arg so it
-    // will end up in a different hash-key in ResourceCache.  TODO: It would be better to use the same URL and
-    // parse it twice.
     auto currentCompoundShapeURL = getCompoundShapeURL();
     ModelEntityItem::setCompoundShapeURL(url);
     if (getCompoundShapeURL() != currentCompoundShapeURL || !getModel()) {
@@ -363,7 +361,17 @@ void RenderableModelEntityItem::computeShapeInfo(ShapeInfo& shapeInfo) {
     const uint32_t QUAD_STRIDE = 4;
 
     ShapeType type = getShapeType();
+
+    auto model = getModel();
+    if (!model || !model->isLoaded()) {
+        type = SHAPE_TYPE_NONE;
+    }
+
     if (type == SHAPE_TYPE_COMPOUND) {
+        if (!_compoundShapeResource || !_compoundShapeResource->isLoaded()) {
+            return;
+        }
+
         updateModelBounds();
 
         // should never fall in here when collision model not fully loaded
@@ -444,10 +452,6 @@ void RenderableModelEntityItem::computeShapeInfo(ShapeInfo& shapeInfo) {
         // to the visual model and apply them to the collision model (without regard for the
         // collision model's extents).
 
-        auto model = getModel();
-        // assert we never fall in here when model not fully loaded
-        assert(model && model->isLoaded());
-
         glm::vec3 dimensions = getScaledDimensions();
         glm::vec3 scaleToFit = dimensions / model->getHFMModel().getUnscaledMeshExtents().size();
         // multiply each point by scale before handing the point-set off to the physics engine.
@@ -463,7 +467,6 @@ void RenderableModelEntityItem::computeShapeInfo(ShapeInfo& shapeInfo) {
         adjustShapeInfoByRegistration(shapeInfo);
     } else if (type >= SHAPE_TYPE_SIMPLE_HULL && type <= SHAPE_TYPE_STATIC_MESH) {
         updateModelBounds();
-        auto model = getModel();
         // assert we never fall in here when model not fully loaded
         assert(model && model->isLoaded());
         model->updateGeometry();
@@ -737,13 +740,15 @@ bool RenderableModelEntityItem::shouldBePhysical() const {
     auto model = getModel();
     // If we have a model, make sure it hasn't failed to download.
     // If it has, we'll report back that we shouldn't be physical so that physics aren't held waiting for us to be ready.
-    if (model && (getShapeType() == SHAPE_TYPE_COMPOUND || getShapeType() == SHAPE_TYPE_SIMPLE_COMPOUND) && model->didCollisionGeometryRequestFail()) {
-        return false;
-    } else if (model && getShapeType() != SHAPE_TYPE_NONE && model->didVisualGeometryRequestFail()) {
-        return false;
-    } else {
-        return ModelEntityItem::shouldBePhysical();
+    ShapeType shapeType = getShapeType();
+    if (model) {
+        if ((shapeType == SHAPE_TYPE_COMPOUND || shapeType == SHAPE_TYPE_SIMPLE_COMPOUND) && model->didCollisionGeometryRequestFail()) {
+            return false;
+        } else if (shapeType != SHAPE_TYPE_NONE && model->didVisualGeometryRequestFail()) {
+            return false;
+        }
     }
+    return !isDead() && shapeType != SHAPE_TYPE_NONE && !isLocalEntity() && QUrl(_modelURL).isValid();
 }
 
 int RenderableModelEntityItem::getJointParent(int index) const {
@@ -928,9 +933,9 @@ void RenderableModelEntityItem::setJointTranslationsSet(const QVector<bool>& tra
     _needsJointSimulation = true;
 }
 
-void RenderableModelEntityItem::locationChanged(bool tellPhysics) {
+void RenderableModelEntityItem::locationChanged(bool tellPhysics, bool tellChildren) {
     DETAILED_PERFORMANCE_TIMER("locationChanged");
-    EntityItem::locationChanged(tellPhysics);
+    EntityItem::locationChanged(tellPhysics, tellChildren);
     auto model = getModel();
     if (model && model->isLoaded()) {
         model->updateRenderItems();
@@ -1032,9 +1037,7 @@ void RenderableModelEntityItem::copyAnimationJointDataToModel() {
     });
 
     if (changed) {
-        forEachChild([&](SpatiallyNestablePointer object) {
-            object->locationChanged(false);
-        });
+        locationChanged(true, true);
     }
 }
 
@@ -1068,13 +1071,6 @@ void ModelEntityRenderer::setKey(bool didVisualGeometryRequestSucceed) {
 
 ItemKey ModelEntityRenderer::getKey() {
     return _itemKey;
-}
-
-render::hifi::Tag ModelEntityRenderer::getTagMask() const {
-    // Default behavior for model is to not be visible in main view if cauterized (aka parented to the avatar's neck joint)
-    return _cauterized ?
-        (_isVisibleInSecondaryCamera ? render::hifi::TAG_SECONDARY_VIEW : render::hifi::TAG_NONE) :
-        Parent::getTagMask(); // calculate which views to be shown in
 }
 
 uint32_t ModelEntityRenderer::metaFetchMetaSubItems(ItemIDs& subItems) { 
@@ -1413,6 +1409,10 @@ void ModelEntityRenderer::doRenderUpdateSynchronousTyped(const ScenePointer& sce
         model->setVisibleInScene(_visible, scene);
     }
 
+    if (model->isCauterized() != _cauterized) {
+        model->setCauterized(_cauterized, scene);
+    }
+
     render::hifi::Tag tagMask = getTagMask();
     if (model->getTagMask() != tagMask) {
         model->setTagMask(tagMask, scene);
@@ -1527,7 +1527,7 @@ void ModelEntityRenderer::doRender(RenderArgs* args) {
         model = _model;
     });
     if (model) {
-        model->renderDebugMeshBoxes(batch);
+        model->renderDebugMeshBoxes(batch, args->_renderMethod == Args::RenderMethod::FORWARD);
     }
 #endif
 }

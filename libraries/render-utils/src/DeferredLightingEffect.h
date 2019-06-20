@@ -37,10 +37,6 @@
 #include "SubsurfaceScattering.h"
 #include "AmbientOcclusionEffect.h"
 
-
-struct LightLocations;
-using LightLocationsPtr = std::shared_ptr<LightLocations>;
-
 // THis is where we currently accumulate the local lights, let s change that sooner than later
 class DeferredLightingEffect : public Dependency {
     SINGLETON_DEPENDENCY
@@ -71,15 +67,6 @@ private:
 
     gpu::PipelinePointer _localLight;
     gpu::PipelinePointer _localLightOutline;
-
-    LightLocationsPtr _directionalSkyboxLightLocations;
-    LightLocationsPtr _directionalAmbientSphereLightLocations;
-
-    LightLocationsPtr _directionalSkyboxLightShadowLocations;
-    LightLocationsPtr _directionalAmbientSphereLightShadowLocations;
-
-    LightLocationsPtr _localLightLocations;
-    LightLocationsPtr _localLightOutlineLocations;
 
     friend class LightClusteringPass;
     friend class RenderDeferredSetup;
@@ -212,7 +199,8 @@ protected:
     HazeStage::Index _defaultHazeID{ HazeStage::INVALID_INDEX };
     graphics::SkyboxPointer _defaultSkybox { new ProceduralSkybox() };
     NetworkTexturePointer _defaultSkyboxNetworkTexture;
-    gpu::TexturePointer _defaultSkyboxAmbientTexture;
+    NetworkTexturePointer _defaultAmbientNetworkTexture;
+    gpu::TexturePointer _defaultAmbientTexture;
 };
 
 #endif // hifi_DeferredLightingEffect_h

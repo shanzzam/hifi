@@ -57,7 +57,7 @@ public:
         ICEServerQuery,
         OctreeStats,
         SetAvatarTraits,
-        UNUSED_PACKET_TYPE,
+        InjectorGainSet,
         AssignmentClientStatus,
         NoisyMute,
         AvatarIdentity,
@@ -134,6 +134,7 @@ public:
         BulkAvatarTraits,
         AudioSoloRequest,
         BulkAvatarTraitsAck,
+        StopInjector,
         NUM_PACKET_TYPE
     };
 
@@ -260,9 +261,16 @@ enum class EntityVersion : PacketVersion {
     MissingWebEntityProperties,
     PulseProperties,
     RingGizmoEntities,
+    AvatarPriorityZone,
     ShowKeyboardFocusHighlight,
     WebBillboardMode,
     ModelScale,
+    ReOrderParentIDProperties,
+    CertificateTypeProperty,
+    DisableWebMedia,
+    ParticleShapeType,
+    ParticleShapeTypeDeadlockFix,
+    PrivateUserData,
 
     // Add new versions above here
     NUM_PACKET_TYPE,
@@ -324,7 +332,10 @@ enum class AvatarMixerPacketVersion : PacketVersion {
     CollisionFlag,
     AvatarTraitsAck,
     FasterAvatarEntities,
-    SendMaxTranslationDimension
+    SendMaxTranslationDimension,
+    FBXJointOrderChange,
+    HandControllerSection,
+    SendVerificationFailed
 };
 
 enum class DomainConnectRequestVersion : PacketVersion {
@@ -333,7 +344,10 @@ enum class DomainConnectRequestVersion : PacketVersion {
     HasProtocolVersions,
     HasMACAddress,
     HasMachineFingerprint,
-    AlwaysHasMachineFingerprint
+    AlwaysHasMachineFingerprint,
+    HasTimestamp,
+    HasReason,
+    HasSystemInfo
 };
 
 enum class DomainConnectionDeniedVersion : PacketVersion {
@@ -352,7 +366,9 @@ enum class DomainListVersion : PacketVersion {
     PermissionsGrid,
     GetUsernameFromUUIDSupport,
     GetMachineFingerprintFromUUIDSupport,
-    AuthenticationOptional
+    AuthenticationOptional,
+    HasTimestamp,
+    HasConnectReason
 };
 
 enum class AudioVersion : PacketVersion {
@@ -363,6 +379,7 @@ enum class AudioVersion : PacketVersion {
     SpaceBubbleChanges,
     HasPersonalMute,
     HighDynamicRangeVolume,
+    StopInjectors
 };
 
 enum class MessageDataVersion : PacketVersion {

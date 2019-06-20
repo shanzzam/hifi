@@ -216,8 +216,8 @@ void RenderDeferredTask::build(JobModel& task, const render::Varying& input, ren
     task.addJob<DrawHaze>("DrawHazeDeferred", drawHazeInputs);
 
     // Render transparent objects forward in LightingBuffer
-    const auto transparentsInputs = DrawDeferred::Inputs(transparents, hazeFrame, lightFrame, lightingModel, lightClusters, shadowFrame, jitter).asVarying();
-    task.addJob<DrawDeferred>("DrawTransparentDeferred", transparentsInputs, shapePlumber);
+    const auto transparentsInputs = RenderTransparentDeferred::Inputs(transparents, hazeFrame, lightFrame, lightingModel, lightClusters, shadowFrame, jitter).asVarying();
+    task.addJob<RenderTransparentDeferred>("DrawTransparentDeferred", transparentsInputs, shapePlumber);
 
     const auto outlineRangeTimer = task.addJob<BeginGPURangeTimer>("BeginHighlightRangeTimer", "Highlight");
 
@@ -248,7 +248,7 @@ void RenderDeferredTask::build(JobModel& task, const render::Varying& input, ren
 
     // Debugging task is happening in the "over" layer after tone mapping and just before HUD
     { // Debug the bounds of the rendered items, still look at the zbuffer
-        const auto extraDebugBuffers = RenderDeferredTaskDebug::ExtraBuffers(linearDepthTarget, surfaceGeometryFramebuffer, ambientOcclusionFramebuffer, ambientOcclusionFramebuffer, scatteringResource, velocityBuffer);
+        const auto extraDebugBuffers = RenderDeferredTaskDebug::ExtraBuffers(linearDepthTarget, surfaceGeometryFramebuffer, ambientOcclusionFramebuffer, ambientOcclusionUniforms, scatteringResource, velocityBuffer);
         const auto debugInputs = RenderDeferredTaskDebug::Input(fetchedItems, shadowTaskOutputs, lightingStageInputs, lightClusters, prepareDeferredOutputs, extraDebugBuffers,
                  deferredFrameTransform, jitter, lightingModel).asVarying();
         task.addJob<RenderDeferredTaskDebug>("DebugRenderDeferredTask", debugInputs);
@@ -364,7 +364,7 @@ void RenderDeferredTaskDebug::build(JobModel& task, const render::Varying& input
             sprintf(jobName, "DrawShadowFrustum%d", i);
             task.addJob<DrawFrustum>(jobName, shadowFrustum, glm::vec3(0.0f, tint, 1.0f));
             if (!renderShadowTaskOut.isNull()) {
-                const auto& shadowCascadeSceneBBoxes = renderShadowTaskOut;
+                const auto& shadowCascadeSceneBBoxes = renderShadowTaskOut.get<RenderShadowTask::CascadeBoxes>();
                 const auto shadowBBox = shadowCascadeSceneBBoxes[ExtractFrustums::SHADOW_CASCADE0_FRUSTUM + i];
                 sprintf(jobName, "DrawShadowBBox%d", i);
                 task.addJob<DrawAABox>(jobName, shadowBBox, glm::vec3(1.0f, tint, 0.0f));
@@ -436,7 +436,7 @@ void RenderDeferredTaskDebug::build(JobModel& task, const render::Varying& input
 }
 
 
-void DrawDeferred::run(const RenderContextPointer& renderContext, const Inputs& inputs) {
+void RenderTransparentDeferred::run(const RenderContextPointer& renderContext, const Inputs& inputs) {
     assert(renderContext->args);
     assert(renderContext->args->hasViewFrustum());
 
@@ -453,7 +453,7 @@ void DrawDeferred::run(const RenderContextPointer& renderContext, const Inputs& 
 
     RenderArgs* args = renderContext->args;
 
-    gpu::doInBatch("DrawDeferred::run", args->_context, [&](gpu::Batch& batch) {
+    gpu::doInBatch("RenderTransparentDeferred::run", args->_context, [&](gpu::Batch& batch) {
         args->_batch = &batch;
         
         // Setup camera, projection and viewport for all items
@@ -471,6 +471,7 @@ void DrawDeferred::run(const RenderContextPointer& renderContext, const Inputs& 
 
         // Setup lighting model for all items;
         batch.setUniformBuffer(ru::Buffer::LightModel, lightingModel->getParametersBuffer());
+        batch.setResourceTexture(ru::Texture::AmbientFresnel, lightingModel->getAmbientFresnelLUT());
 
         // Set the light
         deferredLightingEffect->setupKeyLightBatch(args, batch, *lightFrame);
@@ -536,6 +537,7 @@ void DrawStateSortDeferred::run(const RenderContextPointer& renderContext, const
 
         // Setup lighting model for all items;
         batch.setUniformBuffer(ru::Buffer::LightModel, lightingModel->getParametersBuffer());
+        batch.setResourceTexture(ru::Texture::AmbientFresnel, lightingModel->getAmbientFresnelLUT());
 
         // From the lighting model define a global shapeKey ORED with individiual keys
         ShapeKey::Builder keyBuilder;

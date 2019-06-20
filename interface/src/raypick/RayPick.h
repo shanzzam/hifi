@@ -39,6 +39,21 @@ public:
     float distance { FLT_MAX };
     bool intersects { false };
 
+    /**jsdoc
+     * An intersection result for a ray pick.
+     *
+     * @typedef {object} RayPickResult
+     * @property {IntersectionType} type - The intersection type.
+     * @property {boolean} intersects - <code>true</code> if there's a valid intersection, <code>false</code> if there isn't.
+     * @property {Uuid} objectID - The ID of the intersected object. <code>null</code> for HUD or invalid intersections.
+     * @property {number} distance - The distance from the ray origin to the intersection point.
+     * @property {Vec3} intersection - The intersection point in world coordinates.
+     * @property {Vec3} surfaceNormal - The surface normal at the intersected point. All <code>NaN</code>s if <code>type == 
+     *     Picks.INTERSECTED_HUD</code>.
+     * @property {SubmeshIntersection} extraInfo - Additional intersection details for model objects, otherwise
+     *     <code>{ }</code>.
+     * @property {PickRay} searchRay - The pick ray that was used. Valid even if there is no intersection.
+     */
     virtual QVariantMap toVariantMap() const override {
         QVariantMap toReturn;
         toReturn["type"] = type;
@@ -86,6 +101,7 @@ public:
     static glm::vec2 projectOntoEntityXYPlane(const QUuid& entityID, const glm::vec3& worldPos, bool unNormalized = true);
 
     static glm::vec2 projectOntoXYPlane(const glm::vec3& worldPos, const glm::vec3& position, const glm::quat& rotation, const glm::vec3& dimensions, const glm::vec3& registrationPoint, bool unNormalized);
+    static glm::vec2 projectOntoXZPlane(const glm::vec3& worldPos, const glm::vec3& position, const glm::quat& rotation, const glm::vec3& dimensions, const glm::vec3& registrationPoint, bool unNoemalized);
 
 private:
     static glm::vec3 intersectRayWithXYPlane(const glm::vec3& origin, const glm::vec3& direction, const glm::vec3& point, const glm::quat& rotation, const glm::vec3& registration);

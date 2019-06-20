@@ -34,6 +34,13 @@ public:
     void setupMenus(Menu* menubar, MenuWrapper* menu) override;
     static const QString HOME_BOOKMARK;
 
+    /**jsdoc
+     * @function LocationBookmarks.getAddress
+     * @param {string} bookmarkName Name of the bookmark to get the address for.
+     * @returns {string} The url for the specified bookmark. If the bookmark does not exist, the empty string will be returned.
+     */
+    Q_INVOKABLE QString getAddress(const QString& bookmarkName);
+
 public slots:
 
     /**jsdoc
@@ -46,6 +53,12 @@ public slots:
      * @param {string} address
      */
     void setHomeLocationToAddress(const QVariant& address);
+
+    /**jsdoc
+     * @function LocationBookmarks.getHomeLocationAddress
+     * @returns {string} The url for the home location bookmark
+     */
+    QString getHomeLocationAddress();
 
 protected:
     void addBookmarkToMenu(Menu* menubar, const QString& name, const QVariant& address) override;

@@ -482,7 +482,7 @@ void AddressManager::goToAddressFromObject(const QVariantMap& dataObject, const 
                 } else {
                     QString iceServerAddress = domainObject[DOMAIN_ICE_SERVER_ADDRESS_KEY].toString();
 
-                    qCDebug(networking) << "Possible domain change required to connect to domain with ID" << domainID
+                    qCDebug(networking_ice) << "Possible domain change required to connect to domain with ID" << domainID
                         << "via ice-server at" << iceServerAddress;
 
                     emit possibleDomainChangeRequiredViaICEForID(iceServerAddress, domainID);
@@ -834,6 +834,7 @@ bool AddressManager::setDomainInfo(const QUrl& domainURL, LookupTrigger trigger)
     }
 
     _domainURL = domainURL;
+    _shareablePlaceName.clear();
 
     // clear any current place information
     _rootPlaceID = QUuid();

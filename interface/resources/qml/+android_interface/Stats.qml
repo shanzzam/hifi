@@ -115,6 +115,10 @@ Item {
                     }
                     StatText {
                         visible: root.expanded
+                        text: "Heroes Count/Updated: " + root.heroAvatarCount + "/" + root.updatedHeroAvatarCount
+                    }
+                    StatText {
+                        visible: root.expanded
                         text: "Avatars NOT Updated: " + root.notUpdatedAvatarCount
                     }
                 }
@@ -264,6 +268,9 @@ Item {
                     }
                     StatText {
                         text: "GPU: " + root.gpuFrameTime.toFixed(1) + " ms"
+                    }
+                    StatText {
+                        text: "LOD Target: " + root.lodTargetFramerate + " Hz Angle: " + root.lodAngle + " deg"
                     }
                     StatText {
                         text: "Drawcalls: " + root.drawcalls

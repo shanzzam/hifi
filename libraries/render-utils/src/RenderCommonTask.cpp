@@ -94,8 +94,13 @@ void DrawLayered3D::run(const RenderContextPointer& renderContext, const Inputs&
 
             // Setup lighting model for all items;
             batch.setUniformBuffer(ru::Buffer::LightModel, lightingModel->getParametersBuffer());
+            batch.setResourceTexture(ru::Texture::AmbientFresnel, lightingModel->getAmbientFresnelLUT());
 
-            renderShapes(renderContext, _shapePlumber, inItems, _maxDrawn);
+            if (_opaquePass) {
+                renderStateSortShapes(renderContext, _shapePlumber, inItems, _maxDrawn);
+            } else {
+                renderShapes(renderContext, _shapePlumber, inItems, _maxDrawn);
+            }
             args->_batch = nullptr;
         });
     }
@@ -106,7 +111,7 @@ void CompositeHUD::run(const RenderContextPointer& renderContext, const gpu::Fra
     assert(renderContext->args->_context);
 
     // We do not want to render HUD elements in secondary camera
-    if (renderContext->args->_renderMode == RenderArgs::RenderMode::SECONDARY_CAMERA_RENDER_MODE) {
+    if (nsightActive() || renderContext->args->_renderMode == RenderArgs::RenderMode::SECONDARY_CAMERA_RENDER_MODE) {
         return;
     }
 

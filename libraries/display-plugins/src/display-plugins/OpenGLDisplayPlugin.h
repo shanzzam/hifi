@@ -29,6 +29,8 @@ namespace gpu {
     }
 }
 
+class RefreshRateController;
+
 class OpenGLDisplayPlugin : public DisplayPlugin {
     Q_OBJECT
     Q_PROPERTY(float hudAlpha MEMBER _hudAlpha)
@@ -41,6 +43,9 @@ public:
     ~OpenGLDisplayPlugin();
     // These must be final to ensure proper ordering of operations
     // between the main thread and the presentation thread
+
+    static std::function<void(int)> getRefreshRateOperator();
+
     bool activate() override final;
     void deactivate() override final;
     bool startStandBySession() override final;
@@ -60,8 +65,6 @@ public:
 
     virtual bool setDisplayTexture(const QString& name) override;
     virtual bool onDisplayTextureReset() { return false; };
-    QImage getScreenshot(float aspectRatio = 0.0f) const override;
-    QImage getSecondaryCameraScreenshot() const override;
 
     float presentRate() const override;
 
@@ -83,6 +86,8 @@ public:
 
     void copyTextureToQuickFramebuffer(NetworkTexturePointer source, QOpenGLFramebufferObject* target, GLsync* fenceSync) override;
 
+    virtual std::function<void(gpu::Batch&, const gpu::TexturePointer&, bool mirror)> getHUDOperator() override;
+
 protected:
     friend class PresentThread;
 
@@ -99,9 +104,11 @@ protected:
     virtual QThread::Priority getPresentPriority() { return QThread::HighPriority; }
     virtual void compositeLayers();
     virtual void compositeScene();
-    virtual std::function<void(gpu::Batch&, const gpu::TexturePointer&, bool mirror)> getHUDOperator();
     virtual void compositePointer();
     virtual void compositeExtra() {};
+
+    virtual gpu::PipelinePointer getCompositeScenePipeline();
+    virtual gpu::Element getCompositeFBColorSpace();
 
     // These functions must only be called on the presentation thread
     virtual void customizeContext();
@@ -125,7 +132,7 @@ protected:
 
     void withOtherThreadContext(std::function<void()> f) const;
 
-    void present();
+    void present(const std::shared_ptr<RefreshRateController>& refreshRateController);
     virtual void swapBuffers();
     ivec4 eyeViewport(Eye eye) const;
 
@@ -146,9 +153,11 @@ protected:
     gpu::PipelinePointer _hudPipeline;
     gpu::PipelinePointer _mirrorHUDPipeline;
     gpu::ShaderPointer _mirrorHUDPS;
-    gpu::PipelinePointer _simplePipeline;
-    gpu::PipelinePointer _presentPipeline;
+    gpu::PipelinePointer _drawTexturePipeline;
+    gpu::PipelinePointer _linearToSRGBPipeline;
+    gpu::PipelinePointer _SRGBToLinearPipeline;
     gpu::PipelinePointer _cursorPipeline;
+
     gpu::TexturePointer _displayTexture{};
     float _compositeHUDAlpha { 1.0f };
 
@@ -185,5 +194,8 @@ protected:
     // be serialized through this mutex
     mutable Mutex _presentMutex;
     float _hudAlpha{ 1.0f };
+
+    QImage getScreenshot(float aspectRatio);
+    QImage getSecondaryCameraScreenshot();
 };
 

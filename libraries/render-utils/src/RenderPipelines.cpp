@@ -107,7 +107,7 @@ void initDeferredPipelines(render::ShapePlumber& plumber, const render::ShapePip
         model_translucent_normal_map, nullptr, nullptr);
     addPipeline(
         // FIXME: Ignore lightmap for translucents meshpart
-        Key::Builder().withMaterial().withTranslucent().withLightmap(),
+        Key::Builder().withMaterial().withTranslucent().withLightMap(),
         model_translucent, nullptr, nullptr);
     // Same thing but with Fade on
     addPipeline(
@@ -127,21 +127,21 @@ void initDeferredPipelines(render::ShapePlumber& plumber, const render::ShapePip
         model_translucent_normal_map_fade, batchSetter, itemSetter);
     addPipeline(
         // FIXME: Ignore lightmap for translucents meshpart
-        Key::Builder().withMaterial().withTranslucent().withLightmap().withFade(),
+        Key::Builder().withMaterial().withTranslucent().withLightMap().withFade(),
         model_translucent_fade, batchSetter, itemSetter);
     // Lightmapped
     addPipeline(
-        Key::Builder().withMaterial().withLightmap(),
+        Key::Builder().withMaterial().withLightMap(),
         model_lightmap, nullptr, nullptr);
     addPipeline(
-        Key::Builder().withMaterial().withLightmap().withTangents(),
+        Key::Builder().withMaterial().withLightMap().withTangents(),
         model_lightmap_normal_map, nullptr, nullptr);
     // Same thing but with Fade on
     addPipeline(
-        Key::Builder().withMaterial().withLightmap().withFade(),
+        Key::Builder().withMaterial().withLightMap().withFade(),
         model_lightmap_fade, batchSetter, itemSetter);
     addPipeline(
-        Key::Builder().withMaterial().withLightmap().withTangents().withFade(),
+        Key::Builder().withMaterial().withLightMap().withTangents().withFade(),
         model_lightmap_normal_map_fade, batchSetter, itemSetter);
 
     // matrix palette skinned
@@ -228,9 +228,11 @@ void initForwardPipelines(ShapePlumber& plumber) {
 
     // Opaques
     addPipeline(Key::Builder().withMaterial(), program::forward_model);
+    addPipeline(Key::Builder().withMaterial().withLightMap(), program::forward_model_lightmap);
     addPipeline(Key::Builder().withMaterial().withUnlit(), program::forward_model_unlit);
     addPipeline(Key::Builder().withMaterial().withTangents(), program::forward_model_normal_map);
- 
+    addPipeline(Key::Builder().withMaterial().withTangents().withLightMap(), program::forward_model_normal_map_lightmap);
+
     // Deformed Opaques
     addPipeline(Key::Builder().withMaterial().withDeformed(), program::forward_deformed_model);
     addPipeline(Key::Builder().withMaterial().withDeformed().withTangents(), program::forward_deformed_model_normal_map);
@@ -373,19 +375,14 @@ void initZPassPipelines(ShapePlumber& shapePlumber, gpu::StatePointer state, con
         gpu::Shader::createProgram(deformed_model_shadow_fade_dq), state, extraBatchSetter, itemSetter);
 }
 
-void RenderPipelines::bindMaterial(graphics::MaterialPointer& material, gpu::Batch& batch, bool enableTextures) {
+bool RenderPipelines::bindMaterial(graphics::MaterialPointer& material, gpu::Batch& batch, render::Args::RenderMode renderMode, bool enableTextures) {
     graphics::MultiMaterial multiMaterial;
     multiMaterial.push(graphics::MaterialLayer(material, 0));
-    bindMaterials(multiMaterial, batch, enableTextures);
+    return bindMaterials(multiMaterial, batch, renderMode, enableTextures);
 }
 
 void RenderPipelines::updateMultiMaterial(graphics::MultiMaterial& multiMaterial) {
     auto& schemaBuffer = multiMaterial.getSchemaBuffer();
-
-    if (multiMaterial.size() == 0) {
-        schemaBuffer.edit<graphics::MultiMaterial::Schema>() = graphics::MultiMaterial::Schema();
-        return;
-    }
 
     auto& drawMaterialTextures = multiMaterial.getTextureTable();
     multiMaterial.setTexturesLoading(false);
@@ -584,7 +581,7 @@ void RenderPipelines::updateMultiMaterial(graphics::MultiMaterial& multiMaterial
                     break;
                 case graphics::MaterialKey::EMISSIVE_MAP_BIT:
                     // Lightmap takes precendence over emissive map for legacy reasons
-                    if (materialKey.isEmissiveMap() && !materialKey.isLightmapMap()) {
+                    if (materialKey.isEmissiveMap() && !materialKey.isLightMap()) {
                         auto itr = textureMaps.find(graphics::MaterialKey::EMISSIVE_MAP);
                         if (itr != textureMaps.end()) {
                             if (itr->second->isDefined()) {
@@ -598,14 +595,14 @@ void RenderPipelines::updateMultiMaterial(graphics::MultiMaterial& multiMaterial
                             forceDefault = true;
                         }
                         schemaKey.setEmissiveMap(true);
-                    } else if (materialKey.isLightmapMap()) {
+                    } else if (materialKey.isLightMap()) {
                         // We'll set this later when we check the lightmap
                         wasSet = true;
                     }
                     break;
-                case graphics::MaterialKey::LIGHTMAP_MAP_BIT:
-                    if (materialKey.isLightmapMap()) {
-                        auto itr = textureMaps.find(graphics::MaterialKey::LIGHTMAP_MAP);
+                case graphics::MaterialKey::LIGHT_MAP_BIT:
+                    if (materialKey.isLightMap()) {
+                        auto itr = textureMaps.find(graphics::MaterialKey::LIGHT_MAP);
                         if (itr != textureMaps.end()) {
                             if (itr->second->isDefined()) {
                                 drawMaterialTextures->setTexture(gr::Texture::MaterialEmissiveLightmap, itr->second->getTextureView());
@@ -617,7 +614,7 @@ void RenderPipelines::updateMultiMaterial(graphics::MultiMaterial& multiMaterial
                         } else {
                             forceDefault = true;
                         }
-                        schemaKey.setLightmapMap(true);
+                        schemaKey.setLightMap(true);
                     }
                     break;
                 case graphics::Material::TEXCOORDTRANSFORM0:
@@ -715,12 +712,12 @@ void RenderPipelines::updateMultiMaterial(graphics::MultiMaterial& multiMaterial
                 }
                 break;
             case graphics::MaterialKey::EMISSIVE_MAP_BIT:
-                if (schemaKey.isEmissiveMap() && !schemaKey.isLightmapMap()) {
+                if (schemaKey.isEmissiveMap() && !schemaKey.isLightMap()) {
                     drawMaterialTextures->setTexture(gr::Texture::MaterialEmissiveLightmap, textureCache->getGrayTexture());
                 }
                 break;
-            case graphics::MaterialKey::LIGHTMAP_MAP_BIT:
-                if (schemaKey.isLightmapMap()) {
+            case graphics::MaterialKey::LIGHT_MAP_BIT:
+                if (schemaKey.isLightMap()) {
                     drawMaterialTextures->setTexture(gr::Texture::MaterialEmissiveLightmap, textureCache->getBlackTexture());
                 }
                 break;
@@ -732,22 +729,24 @@ void RenderPipelines::updateMultiMaterial(graphics::MultiMaterial& multiMaterial
     schema._key = (uint32_t)schemaKey._flags.to_ulong();
     schemaBuffer.edit<graphics::MultiMaterial::Schema>() = schema;
     multiMaterial.setNeedsUpdate(false);
+    multiMaterial.setInitialized();
 }
 
-void RenderPipelines::bindMaterials(graphics::MultiMaterial& multiMaterial, gpu::Batch& batch, bool enableTextures) {
-    if (multiMaterial.size() == 0) {
-        return;
-    }
-
-    if (multiMaterial.needsUpdate() || multiMaterial.areTexturesLoading()) {
+bool RenderPipelines::bindMaterials(graphics::MultiMaterial& multiMaterial, gpu::Batch& batch, render::Args::RenderMode renderMode, bool enableTextures) {
+    if (multiMaterial.shouldUpdate()) {
         updateMultiMaterial(multiMaterial);
     }
 
     auto textureCache = DependencyManager::get<TextureCache>();
 
     static gpu::TextureTablePointer defaultMaterialTextures = std::make_shared<gpu::TextureTable>();
+    static gpu::BufferView defaultMaterialSchema;
+
     static std::once_flag once;
     std::call_once(once, [textureCache] {
+        graphics::MultiMaterial::Schema schema;
+        defaultMaterialSchema = gpu::BufferView(std::make_shared<gpu::Buffer>(sizeof(schema), (const gpu::Byte*) &schema, sizeof(schema)));
+
         defaultMaterialTextures->setTexture(gr::Texture::MaterialAlbedo, textureCache->getWhiteTexture());
         defaultMaterialTextures->setTexture(gr::Texture::MaterialMetallic, textureCache->getBlackTexture());
         defaultMaterialTextures->setTexture(gr::Texture::MaterialRoughness, textureCache->getWhiteTexture());
@@ -757,17 +756,29 @@ void RenderPipelines::bindMaterials(graphics::MultiMaterial& multiMaterial, gpu:
         // MaterialEmissiveLightmap has to be set later
     });
 
-    auto& schemaBuffer = multiMaterial.getSchemaBuffer();
-    batch.setUniformBuffer(gr::Buffer::Material, schemaBuffer);
-    if (enableTextures) {
-        batch.setResourceTextureTable(multiMaterial.getTextureTable());
-    } else {
-        auto key = multiMaterial.getMaterialKey();
-        if (key.isLightmapMap()) {
-            defaultMaterialTextures->setTexture(gr::Texture::MaterialEmissiveLightmap, textureCache->getBlackTexture());
-        } else if (key.isEmissiveMap()) {
-            defaultMaterialTextures->setTexture(gr::Texture::MaterialEmissiveLightmap, textureCache->getGrayTexture());
+    // For shadows, we only need opacity mask information
+    auto key = multiMaterial.getMaterialKey();
+    if (renderMode != render::Args::RenderMode::SHADOW_RENDER_MODE || key.isOpacityMaskMap()) {
+        auto& schemaBuffer = multiMaterial.getSchemaBuffer();
+        batch.setUniformBuffer(gr::Buffer::Material, schemaBuffer);
+        if (enableTextures) {
+            batch.setResourceTextureTable(multiMaterial.getTextureTable());
+        } else {
+            if (renderMode != render::Args::RenderMode::SHADOW_RENDER_MODE) {
+                if (key.isLightMap()) {
+                    defaultMaterialTextures->setTexture(gr::Texture::MaterialEmissiveLightmap, textureCache->getBlackTexture());
+                } else if (key.isEmissiveMap()) {
+                    defaultMaterialTextures->setTexture(gr::Texture::MaterialEmissiveLightmap, textureCache->getGrayTexture());
+                }
+            }
+
+            batch.setResourceTextureTable(defaultMaterialTextures);
         }
+        return true;
+    } else {
         batch.setResourceTextureTable(defaultMaterialTextures);
+        batch.setUniformBuffer(gr::Buffer::Material, defaultMaterialSchema);
+        return false;
     }
 }
+

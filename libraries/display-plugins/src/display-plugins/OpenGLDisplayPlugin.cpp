@@ -38,6 +38,7 @@
 #include <gpu/gl/GLBackend.h>
 #include <GeometryCache.h>
 
+#include <CursorManager.h>
 #include <FramebufferCache.h>
 #include <shared/NsightHelpers.h>
 #include <ui-plugins/PluginContainer.h>
@@ -46,6 +47,9 @@
 #include <TextureCache.h>
 #include "CompositorHelper.h"
 #include "Logging.h"
+#include "RefreshRateController.h"
+
+using namespace shader::gpu::program;
 
 extern QThread* RENDER_THREAD;
 
@@ -53,6 +57,7 @@ class PresentThread : public QThread, public Dependency {
     using Mutex = std::mutex;
     using Condition = std::condition_variable;
     using Lock = std::unique_lock<Mutex>;
+
 public:
 
     PresentThread() {
@@ -60,11 +65,15 @@ public:
             shutdown();
         });
         setObjectName("Present");
+
+        _refreshRateController = std::make_shared<RefreshRateController>();
     }
 
     ~PresentThread() {
         shutdown();
     }
+
+    auto getRefreshRateController() { return _refreshRateController; }
 
     void shutdown() {
         if (isRunning()) {
@@ -109,7 +118,6 @@ public:
         Q_ASSERT(_context);
         _context->makeCurrent();
         CHECK_GL_ERROR();
-        _context->doneCurrent();
         while (!_shutdown) {
             if (_pendingOtherThreadOperation) {
                 PROFILE_RANGE(render, "MainThreadOp")
@@ -129,6 +137,7 @@ public:
                     Lock lock(_mutex);
                     _condition.wait(lock, [&] { return _finishedOtherThreadOperation; });
                 }
+                _context->makeCurrent();
             }
 
             // Check for a new display plugin
@@ -140,18 +149,16 @@ public:
                     if (newPlugin != currentPlugin) {
                         // Deactivate the old plugin
                         if (currentPlugin != nullptr) {
-                            _context->makeCurrent();
                             currentPlugin->uncustomizeContext();
                             CHECK_GL_ERROR();
-                            _context->doneCurrent();
+                            // Force completion of all pending GL commands
+                            glFinish();
                         }
 
                         if (newPlugin) {
                             bool hasVsync = true;
                             QThread::setPriority(newPlugin->getPresentPriority());
                             bool wantVsync = newPlugin->wantVsync();
-                            _context->makeCurrent();
-                            CHECK_GL_ERROR();
 #if defined(Q_OS_MAC)
                             newPlugin->swapBuffers();
 #endif
@@ -163,12 +170,13 @@ public:
                             newPlugin->setVsyncEnabled(hasVsync);
                             newPlugin->customizeContext();
                             CHECK_GL_ERROR();
-                            _context->doneCurrent();
+                            // Force completion of all pending GL commands
+                            glFinish();
                         }
                         currentPlugin = newPlugin;
-                        _newPluginQueue.pop();
-                        _condition.notify_one();
                     }
+                    _newPluginQueue.pop();
+                    _condition.notify_one();
                 }
             }
 
@@ -179,18 +187,25 @@ public:
                 continue;
             }
 
-            // Execute the frame and present it to the display device.
+#if defined(Q_OS_MAC)
             _context->makeCurrent();
+#endif
+            // Execute the frame and present it to the display device.
             {
                 PROFILE_RANGE(render, "PluginPresent")
                 gl::globalLock();
-                currentPlugin->present();
+                currentPlugin->present(_refreshRateController);
                 gl::globalRelease(false);
                 CHECK_GL_ERROR();
             }
+#if defined(Q_OS_MAC)
             _context->doneCurrent();
+#endif
+            
+            _refreshRateController->sleepThreadIfNeeded(this, currentPlugin->isHmd());
         }
 
+        _context->doneCurrent();
         Lock lock(_mutex);
         _context->moveToThread(qApp->thread());
         _shutdown = false;
@@ -236,6 +251,7 @@ private:
     bool _finishedOtherThreadOperation { false };
     std::queue<OpenGLDisplayPlugin*> _newPluginQueue;
     gl::Context* _context { nullptr };
+    std::shared_ptr<RefreshRateController> _refreshRateController { nullptr };
 };
 
 bool OpenGLDisplayPlugin::activate() {
@@ -368,47 +384,45 @@ void OpenGLDisplayPlugin::customizeContext() {
         }
     }
 
-    if (!_presentPipeline) {
+    if (!_drawTexturePipeline) {
         gpu::StatePointer blendState = gpu::StatePointer(new gpu::State());
         blendState->setDepthTest(gpu::State::DepthTest(false));
         blendState->setBlendFunction(true,
-            gpu::State::SRC_ALPHA, gpu::State::BLEND_OP_ADD, gpu::State::INV_SRC_ALPHA,
-            gpu::State::FACTOR_ALPHA, gpu::State::BLEND_OP_ADD, gpu::State::ONE);
+                                     gpu::State::SRC_ALPHA, gpu::State::BLEND_OP_ADD,
+                                     gpu::State::INV_SRC_ALPHA,
+                                     gpu::State::FACTOR_ALPHA, gpu::State::BLEND_OP_ADD,
+                                     gpu::State::ONE);
 
         gpu::StatePointer scissorState = gpu::StatePointer(new gpu::State());
         scissorState->setDepthTest(gpu::State::DepthTest(false));
         scissorState->setScissorEnable(true);
 
-        {
-            gpu::ShaderPointer program = gpu::Shader::createProgram(shader::gpu::program::DrawTexture);
-            _simplePipeline = gpu::Pipeline::create(program, scissorState);
-            _hudPipeline = gpu::Pipeline::create(program, blendState);
-        }
+            _drawTexturePipeline = gpu::Pipeline::create(gpu::Shader::createProgram(DrawTexture), scissorState);
 
-        {
-            gpu::ShaderPointer program = gpu::Shader::createProgram(shader::display_plugins::program::SrgbToLinear);
-            _presentPipeline = gpu::Pipeline::create(program, scissorState);
-        }
+            _linearToSRGBPipeline = gpu::Pipeline::create(gpu::Shader::createProgram(DrawTextureGammaLinearToSRGB), scissorState);
 
-        {
-            gpu::ShaderPointer program = gpu::Shader::createProgram(shader::gpu::program::DrawTextureMirroredX);
-            _mirrorHUDPipeline = gpu::Pipeline::create(program, blendState);
-        }
+            _SRGBToLinearPipeline = gpu::Pipeline::create(gpu::Shader::createProgram(DrawTextureGammaSRGBToLinear), scissorState);
 
-        {
-            gpu::ShaderPointer program = gpu::Shader::createProgram(shader::gpu::program::DrawTransformedTexture);
-            _cursorPipeline = gpu::Pipeline::create(program, blendState);
-        }
+            _hudPipeline = gpu::Pipeline::create(gpu::Shader::createProgram(DrawTexture), blendState);
+
+            _mirrorHUDPipeline = gpu::Pipeline::create(gpu::Shader::createProgram(DrawTextureMirroredX), blendState);
+
+            _cursorPipeline = gpu::Pipeline::create(gpu::Shader::createProgram(DrawTransformedTexture), blendState);
     }
+
     updateCompositeFramebuffer();
 }
 
 void OpenGLDisplayPlugin::uncustomizeContext() {
-    _presentPipeline.reset();
-    _cursorPipeline.reset();
+
+    _drawTexturePipeline.reset();
+    _linearToSRGBPipeline.reset();
+    _SRGBToLinearPipeline.reset();
     _hudPipeline.reset();
     _mirrorHUDPipeline.reset();
+    _cursorPipeline.reset();
     _compositeFramebuffer.reset();
+
     withPresentThreadLock([&] {
         _currentFrame.reset();
         _lastFrame = nullptr;
@@ -513,11 +527,9 @@ void OpenGLDisplayPlugin::renderFromTexture(gpu::Batch& batch, const gpu::Textur
     batch.setStateScissorRect(scissor);
     batch.setViewportTransform(viewport);
     batch.setResourceTexture(0, texture);
-#ifndef USE_GLES
-    batch.setPipeline(_presentPipeline);
-#else
-    batch.setPipeline(_simplePipeline);
-#endif
+
+    batch.setPipeline(_drawTexturePipeline);
+    
     batch.draw(gpu::TRIANGLE_STRIP, 4);
     if (copyFbo) {
         gpu::Vec4i copyFboRect(0, 0, copyFbo->getWidth(), copyFbo->getHeight());
@@ -581,9 +593,10 @@ std::function<void(gpu::Batch&, const gpu::TexturePointer&, bool mirror)> OpenGL
         hudEyeViewports[eye] = eyeViewport(eye);
     });
     return [=](gpu::Batch& batch, const gpu::TexturePointer& hudTexture, bool mirror) {
-        if (hudPipeline && hudTexture) {
+        auto pipeline = mirror ? hudMirrorPipeline : hudPipeline;
+        if (pipeline && hudTexture) {
             batch.enableStereo(false);
-            batch.setPipeline(mirror ? hudMirrorPipeline : hudPipeline);
+            batch.setPipeline(pipeline);
             batch.setResourceTexture(0, hudTexture);
             if (hudStereo) {
                 for_each_eye([&](Eye eye) {
@@ -622,6 +635,11 @@ void OpenGLDisplayPlugin::compositePointer() {
     });
 }
 
+// Overridden by Basic2DWindowDisplayPlugin and OculusDisplayPlugin
+gpu::PipelinePointer OpenGLDisplayPlugin::getCompositeScenePipeline() {
+    return _drawTexturePipeline;
+}
+
 void OpenGLDisplayPlugin::compositeScene() {
     render([&](gpu::Batch& batch) {
         batch.enableStereo(false);
@@ -630,7 +648,7 @@ void OpenGLDisplayPlugin::compositeScene() {
         batch.setStateScissorRect(ivec4(uvec2(), _compositeFramebuffer->getSize()));
         batch.resetViewTransform();
         batch.setProjectionTransform(mat4());
-        batch.setPipeline(_simplePipeline);
+        batch.setPipeline(getCompositeScenePipeline());
         batch.setResourceTexture(0, _currentFrame->framebuffer->getRenderBuffer(0));
         batch.draw(gpu::TRIANGLE_STRIP, 4);
     });
@@ -644,27 +662,19 @@ void OpenGLDisplayPlugin::compositeLayers() {
         compositeScene();
     }
 
-#ifdef HIFI_ENABLE_NSIGHT_DEBUG
-    if (false) // do not draw the HUD if running nsight debug
-#endif
-    {
-        PROFILE_RANGE_EX(render_detail, "handleHUDBatch", 0xff0077ff, (uint64_t)presentCount())
-        auto hudOperator = getHUDOperator();
-        withPresentThreadLock([&] {
-            _hudOperator = hudOperator;
-        });
-    }
-
     {
         PROFILE_RANGE_EX(render_detail, "compositeExtra", 0xff0077ff, (uint64_t)presentCount())
         compositeExtra();
     }
 
-    // Draw the pointer last so it's on top of everything
-    auto compositorHelper = DependencyManager::get<CompositorHelper>();
-    if (compositorHelper->getReticleVisible()) {
-        PROFILE_RANGE_EX(render_detail, "compositePointer", 0xff0077ff, (uint64_t)presentCount())
+    auto& cursorManager = Cursor::Manager::instance();
+    if (isHmd() || cursorManager.getCursor()->getIcon() == Cursor::RETICLE) {
+        auto compositorHelper = DependencyManager::get<CompositorHelper>();
+        // Draw the pointer last so it's on top of everything
+        if (compositorHelper->getReticleVisible()) {
+            PROFILE_RANGE_EX(render_detail, "compositePointer", 0xff0077ff, (uint64_t)presentCount())
             compositePointer();
+        }
     }
 }
 
@@ -679,11 +689,11 @@ void OpenGLDisplayPlugin::internalPresent() {
     _presentRate.increment();
 }
 
-void OpenGLDisplayPlugin::present() {
+void OpenGLDisplayPlugin::present(const std::shared_ptr<RefreshRateController>& refreshRateController) {
     auto frameId = (uint64_t)presentCount();
     PROFILE_RANGE_EX(render, __FUNCTION__, 0xffffff00, frameId)
     uint64_t startPresent = usecTimestampNow();
-
+    refreshRateController->clockStartTime();
     {
         PROFILE_RANGE_EX(render, "updateFrameData", 0xff00ff00, frameId)
         updateFrameData();
@@ -713,7 +723,21 @@ void OpenGLDisplayPlugin::present() {
             compositeLayers();
         }
 
+        { // If we have any snapshots this frame, handle them
+            PROFILE_RANGE_EX(render, "snapshotOperators", 0xffff00ff, frameId)
+            while (!_currentFrame->snapshotOperators.empty()) {
+                auto& snapshotOperator = _currentFrame->snapshotOperators.front();
+                if (std::get<2>(snapshotOperator)) {
+                    std::get<0>(snapshotOperator)(getScreenshot(std::get<1>(snapshotOperator)));
+                } else {
+                    std::get<0>(snapshotOperator)(getSecondaryCameraScreenshot());
+                }
+                _currentFrame->snapshotOperators.pop();
+            }
+        }
+
         // Take the composite framebuffer and send it to the output device
+        refreshRateController->clockEndTime();
         {
             PROFILE_RANGE_EX(render, "internalPresent", 0xff00ffff, frameId)
             internalPresent();
@@ -721,7 +745,10 @@ void OpenGLDisplayPlugin::present() {
 
         gpu::Backend::freeGPUMemSize.set(gpu::gl::getFreeDedicatedMemory());
     } else if (alwaysPresent()) {
+        refreshRateController->clockEndTime();
         internalPresent();
+    } else {
+        refreshRateController->clockEndTime();
     }
     _movingAveragePresent.addSample((float)(usecTimestampNow() - startPresent));
 }
@@ -736,6 +763,13 @@ float OpenGLDisplayPlugin::droppedFrameRate() const {
 
 float OpenGLDisplayPlugin::presentRate() const {
     return _presentRate.rate();
+}
+
+std::function<void(int)>  OpenGLDisplayPlugin::getRefreshRateOperator() {
+    return [](int targetRefreshRate) {
+        auto refreshRateController = DependencyManager::get<PresentThread>()->getRefreshRateController();
+        refreshRateController->setRefreshRateLimitPeriod(targetRefreshRate);
+    };
 }
 
 void OpenGLDisplayPlugin::resetPresentRate() {
@@ -777,7 +811,7 @@ bool OpenGLDisplayPlugin::setDisplayTexture(const QString& name) {
     return !!_displayTexture;
 }
 
-QImage OpenGLDisplayPlugin::getScreenshot(float aspectRatio) const {
+QImage OpenGLDisplayPlugin::getScreenshot(float aspectRatio) {
     auto size = _compositeFramebuffer->getSize();
     if (isHmd()) {
         size.x /= 2;
@@ -793,24 +827,18 @@ QImage OpenGLDisplayPlugin::getScreenshot(float aspectRatio) const {
         corner.x = round((size.x - bestSize.x) / 2.0f);
         corner.y = round((size.y - bestSize.y) / 2.0f);
     }
-    auto glBackend = const_cast<OpenGLDisplayPlugin&>(*this).getGLBackend();
     QImage screenshot(bestSize.x, bestSize.y, QImage::Format_ARGB32);
-    withOtherThreadContext([&] {
-        glBackend->downloadFramebuffer(_compositeFramebuffer, ivec4(corner, bestSize), screenshot);
-    });
+    getGLBackend()->downloadFramebuffer(_compositeFramebuffer, ivec4(corner, bestSize), screenshot);
     return screenshot.mirrored(false, true);
 }
 
-QImage OpenGLDisplayPlugin::getSecondaryCameraScreenshot() const {
+QImage OpenGLDisplayPlugin::getSecondaryCameraScreenshot() {
     auto textureCache = DependencyManager::get<TextureCache>();
     auto secondaryCameraFramebuffer = textureCache->getSpectatorCameraFramebuffer();
     gpu::Vec4i region(0, 0, secondaryCameraFramebuffer->getWidth(), secondaryCameraFramebuffer->getHeight());
 
-    auto glBackend = const_cast<OpenGLDisplayPlugin&>(*this).getGLBackend();
     QImage screenshot(region.z, region.w, QImage::Format_ARGB32);
-    withOtherThreadContext([&] {
-        glBackend->downloadFramebuffer(secondaryCameraFramebuffer, region, screenshot);
-    });
+    getGLBackend()->downloadFramebuffer(secondaryCameraFramebuffer, region, screenshot);
     return screenshot.mirrored(false, true);
 }
 
@@ -881,10 +909,17 @@ void OpenGLDisplayPlugin::render(std::function<void(gpu::Batch& batch)> f) {
 OpenGLDisplayPlugin::~OpenGLDisplayPlugin() {
 }
 
+// Added this to allow desktop composite framebuffer to be RGBA while mobile is SRGBA
+// Overridden by Basic2DWindowDisplayPlugin
+// FIXME: Eventually it would be ideal to have both framebuffers be of the same type
+gpu::Element OpenGLDisplayPlugin::getCompositeFBColorSpace() {
+    return gpu::Element::COLOR_RGBA_32;
+}
+
 void OpenGLDisplayPlugin::updateCompositeFramebuffer() {
     auto renderSize = glm::uvec2(getRecommendedRenderSize());
     if (!_compositeFramebuffer || _compositeFramebuffer->getSize() != renderSize) {
-        _compositeFramebuffer = gpu::FramebufferPointer(gpu::Framebuffer::create("OpenGLDisplayPlugin::composite", gpu::Element::COLOR_RGBA_32, renderSize.x, renderSize.y));
+        _compositeFramebuffer = gpu::FramebufferPointer(gpu::Framebuffer::create("OpenGLDisplayPlugin::composite", getCompositeFBColorSpace(), renderSize.x, renderSize.y));
     }
 }
 

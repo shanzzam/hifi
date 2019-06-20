@@ -121,7 +121,11 @@ void MaterialEntityRenderer::doRenderUpdateAsynchronousTyped(const TypedEntityPo
             QString materialURL = entity->getMaterialURL();
             if (materialURL != _materialURL) {
                 _materialURL = materialURL;
-                if (_materialURL.contains("?")) {
+                if (_materialURL.contains("#")) {
+                    auto split = _materialURL.split("#");
+                    newCurrentMaterialName = split.last().toStdString();
+                } else if (_materialURL.contains("?")) {
+                    qDebug() << "DEPRECATED: Use # instead of ? for material URLS:" << _materialURL;
                     auto split = _materialURL.split("?");
                     newCurrentMaterialName = split.last().toStdString();
                 }
@@ -169,7 +173,7 @@ void MaterialEntityRenderer::doRenderUpdateAsynchronousTyped(const TypedEntityPo
 
         if (urlChanged && !usingMaterialData) {
             _networkMaterial = MaterialCache::instance().getMaterial(_materialURL);
-            auto onMaterialRequestFinished = [&, oldParentID, oldParentMaterialName, newCurrentMaterialName](bool success) {
+            auto onMaterialRequestFinished = [this, oldParentID, oldParentMaterialName, newCurrentMaterialName](bool success) {
                 if (success) {
                     deleteMaterial(oldParentID, oldParentMaterialName);
                     _texturesLoaded = false;
@@ -186,7 +190,11 @@ void MaterialEntityRenderer::doRenderUpdateAsynchronousTyped(const TypedEntityPo
                 if (_networkMaterial->isLoaded()) {
                     onMaterialRequestFinished(!_networkMaterial->isFailed());
                 } else {
-                    connect(_networkMaterial.data(), &Resource::finished, this, onMaterialRequestFinished);
+                    connect(_networkMaterial.data(), &Resource::finished, this, [this, onMaterialRequestFinished](bool success) {
+                        withWriteLock([&] {
+                            onMaterialRequestFinished(success);
+                        });
+                    });
                 }
             }
         } else if (materialDataChanged && usingMaterialData) {
@@ -249,7 +257,7 @@ ShapeKey MaterialEntityRenderer::getShapeKey() {
 
     bool isTranslucent = drawMaterialKey.isTranslucent();
     bool hasTangents = drawMaterialKey.isNormalMap();
-    bool hasLightmap = drawMaterialKey.isLightmapMap();
+    bool hasLightmap = drawMaterialKey.isLightMap();
     bool isUnlit = drawMaterialKey.isUnlit();
     
     ShapeKey::Builder builder;
@@ -262,7 +270,7 @@ ShapeKey MaterialEntityRenderer::getShapeKey() {
         builder.withTangents();
     }
     if (hasLightmap) {
-        builder.withLightmap();
+        builder.withLightMap();
     }
     if (isUnlit) {
         builder.withUnlit();
@@ -305,11 +313,9 @@ void MaterialEntityRenderer::doRender(RenderArgs* args) {
 
     batch.setModelTransform(renderTransform);
 
-    if (args->_renderMode != render::Args::RenderMode::SHADOW_RENDER_MODE) {
-        drawMaterial->setTextureTransforms(textureTransform, MaterialMappingMode::UV, true);
-
-        // bind the material
-        RenderPipelines::bindMaterial(drawMaterial, batch, args->_enableTexturing);
+    drawMaterial->setTextureTransforms(textureTransform, MaterialMappingMode::UV, true);
+    // bind the material
+    if (RenderPipelines::bindMaterial(drawMaterial, batch, args->_renderMode, args->_enableTexturing)) {
         args->_details._materialSwitches++;
     }
 
@@ -354,7 +360,13 @@ void MaterialEntityRenderer::deleteMaterial(const QUuid& oldParentID, const QStr
         return;
     }
 
-    // if a remove fails, our parent is gone, so we don't need to retry
+    // if a remove fails, our parent is gone, so we don't need to retry, EXCEPT:
+    // MyAvatar can change UUIDs when you switch domains, which leads to a timing issue.  Let's just make
+    // sure we weren't attached to MyAvatar by trying this (if we weren't, this will have no effect)
+    if (EntityTreeRenderer::removeMaterialFromAvatar(AVATAR_SELF_ID, material, oldParentMaterialNameStd)) {
+        _appliedMaterial = nullptr;
+        return;
+    }
 }
 
 void MaterialEntityRenderer::applyTextureTransform(std::shared_ptr<NetworkMaterial>& material) {

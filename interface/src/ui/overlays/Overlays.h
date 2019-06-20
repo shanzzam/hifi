@@ -77,7 +77,7 @@ public:
  * @hifi-avatar
  *
  * @property {Uuid} keyboardFocusOverlay - Get or set the {@link Entities.EntityTypes|Web} entity that has keyboard focus.
- *     If no entity has keyboard focus, get returns <code>null</code>; set to <code>null</code> or {@link Uuid|Uuid.NULL} to 
+ *     If no entity has keyboard focus, get returns <code>null</code>; set to <code>null</code> or {@link Uuid(0)|Uuid.NULL} to 
  *     clear keyboard focus.
  */
 
@@ -112,11 +112,6 @@ public:
         const QVector<EntityItemID>& discard,
         bool visibleOnly = false, bool collidableOnly = false);
 
-    std::pair<float, QUuid> mousePressEvent(QMouseEvent* event);
-    bool mouseDoublePressEvent(QMouseEvent* event);
-    bool mouseReleaseEvent(QMouseEvent* event);
-    bool mouseMoveEvent(QMouseEvent* event);
-
     void cleanupAllOverlays();
 
     mutable QScriptEngine _scriptEngine;
@@ -127,7 +122,7 @@ public slots:
      * @function Overlays.addOverlay
      * @param {Overlays.OverlayType} type - The type of the overlay to add.
      * @param {Overlays.OverlayProperties} properties - The properties of the overlay to add.
-     * @returns {Uuid} The ID of the newly created overlay if successful, otherwise {@link Uuid|Uuid.NULL}.
+     * @returns {Uuid} The ID of the newly created overlay if successful, otherwise {@link Uuid(0)|Uuid.NULL}.
      * @example <caption>Add a cube overlay in front of your avatar.</caption>
      * var overlay = Overlays.addOverlay("cube", {
      *     position: Vec3.sum(MyAvatar.position, Vec3.multiplyQbyV(MyAvatar.orientation, { x: 0, y: 0, z: -3 })),
@@ -142,7 +137,7 @@ public slots:
      * Create a clone of an existing entity (or 2D overlay).
      * @function Overlays.cloneOverlay
      * @param {Uuid} id - The ID of the entity/2D overlay to clone.
-     * @returns {Uuid} The ID of the new object if successful, otherwise {@link Uuid|Uuid.NULL}.
+     * @returns {Uuid} The ID of the new object if successful, otherwise {@link Uuid(0)|Uuid.NULL}.
      */
     QUuid cloneOverlay(const QUuid& id);
 
@@ -567,7 +562,7 @@ public slots:
      * Set the Web3D entity that has keyboard focus.
      * @function Overlays.setKeyboardFocusOverlay
      * @param {Uuid} id - The ID of the {@link Entities.EntityTypes|Web} entity to set keyboard focus to. Use 
-     *     <code>null</code> or {@link Uuid|Uuid.NULL} to unset keyboard focus from an overlay.
+     *     <code>null</code> or {@link Uuid(0)|Uuid.NULL} to unset keyboard focus from an overlay.
      */
     void setKeyboardFocusOverlay(const QUuid& id) { DependencyManager::get<EntityScriptingInterface>()->setKeyboardFocusEntity(id); }
 
@@ -719,9 +714,6 @@ private:
     PointerEvent calculateOverlayPointerEvent(const QUuid& id, const PickRay& ray, const RayToOverlayIntersectionResult& rayPickResult,
         QMouseEvent* event, PointerEvent::EventType eventType);
 
-    QUuid _currentClickingOnOverlayID;
-    QUuid _currentHoverOverOverlayID;
-
     static QString entityToOverlayType(const QString& type);
     static QString overlayToEntityType(const QString& type);
     static std::unordered_map<QString, QString> _entityToOverlayTypes;
@@ -732,12 +724,17 @@ private:
     EntityItemProperties convertOverlayToEntityProperties(QVariantMap& overlayProps, std::pair<glm::quat, bool>& rotationToSave, const QString& type, bool add, const QUuid& id = QUuid());
 
 private slots:
-    void mousePressPointerEvent(const QUuid& id, const PointerEvent& event);
-    void mouseMovePointerEvent(const QUuid& id, const PointerEvent& event);
+    void mousePressOnPointerEvent(const QUuid& id, const PointerEvent& event);
+    void mousePressOffPointerEvent();
+    void mouseDoublePressOnPointerEvent(const QUuid& id, const PointerEvent& event);
+    void mouseDoublePressOffPointerEvent();
     void mouseReleasePointerEvent(const QUuid& id, const PointerEvent& event);
+    void mouseMovePointerEvent(const QUuid& id, const PointerEvent& event);
     void hoverEnterPointerEvent(const QUuid& id, const PointerEvent& event);
     void hoverOverPointerEvent(const QUuid& id, const PointerEvent& event);
     void hoverLeavePointerEvent(const QUuid& id, const PointerEvent& event);
+
+
 };
 
 #define ADD_TYPE_MAP(entity, overlay) \

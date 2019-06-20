@@ -27,6 +27,7 @@
 #include "VrMenu.h"
 
 #include "ui/Logging.h"
+#include "ui/ToolbarScriptingInterface.h"
 
 #include <PointerManager.h>
 #include "MainWindow.h"
@@ -240,13 +241,21 @@ class MessageBoxListener : public ModalDialogListener {
         return static_cast<QMessageBox::StandardButton>(_result.toInt());
     }
 
+protected slots:
+    virtual void onDestroyed() override {
+        ModalDialogListener::onDestroyed();
+        onSelected(QMessageBox::NoButton);
+    }
+
 private slots:
     void onSelected(int button) {
         _result = button;
         _finished = true;
         auto offscreenUi = DependencyManager::get<OffscreenUi>();
         emit response(_result);
-        offscreenUi->removeModalDialog(qobject_cast<QObject*>(this));
+        if (!offscreenUi.isNull()) {
+            offscreenUi->removeModalDialog(qobject_cast<QObject*>(this));
+        }
         disconnect(_dialog);
     }
 };
@@ -679,6 +688,10 @@ void OffscreenUi::createDesktop(const QUrl& url) {
         for (const auto& menuInitializer : _queuedMenuInitializers) {
             menuInitializer(_vrMenu);
         }
+
+
+        auto toolbarScriptingInterface = DependencyManager::get<ToolbarScriptingInterface>();
+        connect(_desktop, SIGNAL(toolbarVisibleChanged(bool, QString)), toolbarScriptingInterface.data(), SIGNAL(toolbarVisibleChanged(bool, QString)));
 
         auto keyboardFocus = new KeyboardFocusHack();
         connect(_desktop, SIGNAL(showDesktop()), this, SIGNAL(showDesktop()));

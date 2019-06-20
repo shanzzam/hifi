@@ -177,6 +177,8 @@ std::pair<std::string, std::shared_ptr<NetworkMaterial>> NetworkMaterialResource
         material->setModel(modelString);
     }
 
+    std::array<glm::mat4, graphics::Material::NUM_TEXCOORD_TRANSFORMS> texcoordTransforms;
+
     if (modelString == HIFI_PBR) {
         const QString FALLTHROUGH("fallthrough");
         for (auto& key : materialJSON.keys()) {
@@ -184,6 +186,7 @@ std::pair<std::string, std::shared_ptr<NetworkMaterial>> NetworkMaterialResource
                 auto nameJSON = materialJSON.value(key);
                 if (nameJSON.isString()) {
                     name = nameJSON.toString().toStdString();
+                    material->setName(name);
                 }
             } else if (key == "model") {
                 auto modelJSON = materialJSON.value(key);
@@ -359,9 +362,9 @@ std::pair<std::string, std::shared_ptr<NetworkMaterial>> NetworkMaterialResource
                 if (value.isString()) {
                     auto valueString = value.toString();
                     if (valueString == FALLTHROUGH) {
-                        material->setPropertyDoesFallthrough(graphics::MaterialKey::FlagBit::LIGHTMAP_MAP_BIT);
+                        material->setPropertyDoesFallthrough(graphics::MaterialKey::FlagBit::LIGHT_MAP_BIT);
                     } else {
-                        material->setLightmapMap(baseUrl.resolved(valueString));
+                        material->setLightMap(baseUrl.resolved(valueString));
                     }
                 }
             } else if (key == "texCoordTransform0") {
@@ -371,8 +374,11 @@ std::pair<std::string, std::shared_ptr<NetworkMaterial>> NetworkMaterialResource
                     if (valueString == FALLTHROUGH) {
                         material->setPropertyDoesFallthrough(graphics::Material::ExtraFlagBit::TEXCOORDTRANSFORM0);
                     }
+                } else if (value.isObject()) {
+                    auto valueVariant = value.toVariant();
+                    glm::mat4 transform = mat4FromVariant(valueVariant);
+                    texcoordTransforms[0] = transform;
                 }
-                // TODO: implement texCoordTransform0
             } else if (key == "texCoordTransform1") {
                 auto value = materialJSON.value(key);
                 if (value.isString()) {
@@ -380,8 +386,11 @@ std::pair<std::string, std::shared_ptr<NetworkMaterial>> NetworkMaterialResource
                     if (valueString == FALLTHROUGH) {
                         material->setPropertyDoesFallthrough(graphics::Material::ExtraFlagBit::TEXCOORDTRANSFORM1);
                     }
+                } else if (value.isObject()) {
+                    auto valueVariant = value.toVariant();
+                    glm::mat4 transform = mat4FromVariant(valueVariant);
+                    texcoordTransforms[1] = transform;
                 }
-                // TODO: implement texCoordTransform1
             } else if (key == "lightmapParams") {
                 auto value = materialJSON.value(key);
                 if (value.isString()) {
@@ -408,6 +417,15 @@ std::pair<std::string, std::shared_ptr<NetworkMaterial>> NetworkMaterialResource
             }
         }
     }
+
+    // Do this after the texture maps are defined, so it overrides the default transforms
+    for (int i = 0; i < graphics::Material::NUM_TEXCOORD_TRANSFORMS; i++) {
+        mat4 newTransform = texcoordTransforms[i];
+        if (newTransform != mat4() || newTransform != material->getTexCoordTransform(i)) {
+            material->setTexCoordTransform(i, newTransform);
+        }
+    }
+
     return std::pair<std::string, std::shared_ptr<NetworkMaterial>>(name, material);
 }
 
@@ -549,18 +567,17 @@ void NetworkMaterial::setScatteringMap(const QUrl& url) {
     }
 }
 
-void NetworkMaterial::setLightmapMap(const QUrl& url) {
-    auto map = fetchTextureMap(url, image::TextureUsage::LIGHTMAP_TEXTURE, MapChannel::LIGHTMAP_MAP);
+void NetworkMaterial::setLightMap(const QUrl& url) {
+    auto map = fetchTextureMap(url, image::TextureUsage::LIGHTMAP_TEXTURE, MapChannel::LIGHT_MAP);
     if (map) {
         //map->setTextureTransform(_lightmapTransform);
         //map->setLightmapOffsetScale(_lightmapParams.x, _lightmapParams.y);
-        setTextureMap(MapChannel::LIGHTMAP_MAP, map);
+        setTextureMap(MapChannel::LIGHT_MAP, map);
     }
 }
 
 NetworkMaterial::NetworkMaterial(const HFMMaterial& material, const QUrl& textureBaseUrl) :
-    graphics::Material(*material._material),
-    _textures(MapChannel::NUM_MAP_CHANNELS)
+    graphics::Material(*material._material)
 {
     _name = material.name.toStdString();
     if (!material.albedoTexture.filename.isEmpty()) {
@@ -623,14 +640,14 @@ NetworkMaterial::NetworkMaterial(const HFMMaterial& material, const QUrl& textur
     }
 
     if (!material.lightmapTexture.filename.isEmpty()) {
-        auto map = fetchTextureMap(textureBaseUrl, material.lightmapTexture, image::TextureUsage::LIGHTMAP_TEXTURE, MapChannel::LIGHTMAP_MAP);
+        auto map = fetchTextureMap(textureBaseUrl, material.lightmapTexture, image::TextureUsage::LIGHTMAP_TEXTURE, MapChannel::LIGHT_MAP);
         if (map) {
             _lightmapTransform = material.lightmapTexture.transform;
             _lightmapParams = material.lightmapParams;
             map->setTextureTransform(_lightmapTransform);
             map->setLightmapOffsetScale(_lightmapParams.x, _lightmapParams.y);
         }
-        setTextureMap(MapChannel::LIGHTMAP_MAP, map);
+        setTextureMap(MapChannel::LIGHT_MAP, map);
     }
 }
 
@@ -643,7 +660,7 @@ void NetworkMaterial::setTextures(const QVariantMap& textureMap) {
     const auto& metallicName = getTextureName(MapChannel::METALLIC_MAP);
     const auto& occlusionName = getTextureName(MapChannel::OCCLUSION_MAP);
     const auto& emissiveName = getTextureName(MapChannel::EMISSIVE_MAP);
-    const auto& lightmapName = getTextureName(MapChannel::LIGHTMAP_MAP);
+    const auto& lightmapName = getTextureName(MapChannel::LIGHT_MAP);
     const auto& scatteringName = getTextureName(MapChannel::SCATTERING_MAP);
 
     if (!albedoName.isEmpty()) {
@@ -698,18 +715,18 @@ void NetworkMaterial::setTextures(const QVariantMap& textureMap) {
 
     if (!lightmapName.isEmpty()) {
         auto url = textureMap.contains(lightmapName) ? textureMap[lightmapName].toUrl() : QUrl();
-        auto map = fetchTextureMap(url, image::TextureUsage::LIGHTMAP_TEXTURE, MapChannel::LIGHTMAP_MAP);
+        auto map = fetchTextureMap(url, image::TextureUsage::LIGHTMAP_TEXTURE, MapChannel::LIGHT_MAP);
         if (map) {
             map->setTextureTransform(_lightmapTransform);
             map->setLightmapOffsetScale(_lightmapParams.x, _lightmapParams.y);
         }
-        setTextureMap(MapChannel::LIGHTMAP_MAP, map);
+        setTextureMap(MapChannel::LIGHT_MAP, map);
     }
 }
 
 bool NetworkMaterial::isMissingTexture() {
     for (auto& networkTexture : _textures) {
-        auto& texture = networkTexture.texture;
+        auto& texture = networkTexture.second.texture;
         if (!texture) {
             continue;
         }

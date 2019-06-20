@@ -48,6 +48,9 @@ public:
 
     void pluginUpdate() override {};
 
+    std::function<void(gpu::Batch&, const gpu::TexturePointer&, bool mirror)> getHUDOperator() override;
+    virtual StencilMaskMode getStencilMaskMode() const override { return StencilMaskMode::PAINT; }
+
 signals:
     void hmdMountedChanged();
     void hmdVisibleChanged(bool visible);
@@ -60,7 +63,6 @@ protected:
 
     bool internalActivate() override;
     void internalDeactivate() override;
-    std::function<void(gpu::Batch&, const gpu::TexturePointer&, bool mirror)> getHUDOperator() override;
     void compositePointer() override;
     void internalPresent() override;
     void customizeContext() override;
@@ -103,7 +105,7 @@ private:
         gpu::BufferPointer vertices;
         gpu::BufferPointer indices;
         uint32_t indexCount { 0 };
-        gpu::PipelinePointer pipeline;
+        gpu::PipelinePointer pipeline { nullptr };
 
         gpu::BufferPointer uniformsBuffer;
 
@@ -121,7 +123,6 @@ private:
         static const int VERTEX_STRIDE { sizeof(Vertex) };
 
         void build();
-        void updatePipeline();
-        std::function<void(gpu::Batch&, const gpu::TexturePointer&, bool mirror)> render(HmdDisplayPlugin& plugin);
+        std::function<void(gpu::Batch&, const gpu::TexturePointer&, bool mirror)> render();
     } _hudRenderer;
 };

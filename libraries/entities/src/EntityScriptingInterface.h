@@ -114,7 +114,7 @@ public:
  * @hifi-assignment-client
  *
  * @property {Uuid} keyboardFocusEntity - Get or set the {@link Entities.EntityType|Web} entity that has keyboard focus.
- *     If no entity has keyboard focus, get returns <code>null</code>; set to <code>null</code> or {@link Uuid|Uuid.NULL} to 
+ *     If no entity has keyboard focus, get returns <code>null</code>; set to <code>null</code> or {@link Uuid(0)|Uuid.NULL} to 
  *     clear keyboard focus.
  */
 /// handles scripting of Entity commands from JS passed to assigned clients
@@ -237,6 +237,14 @@ public slots:
     Q_INVOKABLE bool canReplaceContent();
 
     /**jsdoc
+     * Check whether or not you can get and set private user data.
+     * @function Entities.canGetAndSetPrivateUserData
+     * @returns {boolean} <code>true</code> if the domain server will allow the user to get and set private user data,
+     *     otherwise <code>false</code>.
+     */
+    Q_INVOKABLE bool canGetAndSetPrivateUserData();
+
+    /**jsdoc
      * <p>How an entity is sent over the wire.</p>
      * <table>
      *   <thead>
@@ -259,7 +267,7 @@ public slots:
      *     follows you to each domain you visit, rendering at the same world coordinates unless it's parented to your avatar.
      *     If <code>"local"</code>, the entity is created as a local entity, which will only render for you and isn't sent over the wire.
      *     Otherwise it is created as a normal entity and sent over the entity server.
-     * @returns {Uuid} The ID of the entity if successfully created, otherwise {@link Uuid|Uuid.NULL}.
+     * @returns {Uuid} The ID of the entity if successfully created, otherwise {@link Uuid(0)|Uuid.NULL}.
      * @example <caption>Create a box entity in front of your avatar.</caption>
      * var entityID = Entities.addEntity({
      *     type: "Box",
@@ -286,7 +294,7 @@ public slots:
      * @function Entities.addEntity
      * @param {Entities.EntityProperties} properties - The properties of the entity to create.
      * @param {boolean} [avatarEntity=false] - Whether to create an avatar entity or a domain entity
-     * @returns {Uuid} The ID of the entity if successfully created, otherwise {@link Uuid|Uuid.NULL}.
+     * @returns {Uuid} The ID of the entity if successfully created, otherwise {@link Uuid(0)|Uuid.NULL}.
      */
     Q_INVOKABLE QUuid addEntity(const EntityItemProperties& properties, bool avatarEntity = false) {
         entity::HostType entityHostType = avatarEntity ? entity::HostType::AVATAR : entity::HostType::DOMAIN;
@@ -304,7 +312,7 @@ public slots:
      * properties set per its clone related-properties, and its clone-related properties are set to defaults. 
      * @function Entities.cloneEntity
      * @param {Uuid} entityID - The ID of the entity to clone.
-     * @returns {Uuid} The ID of the new entity if successfully cloned, otherwise {@link Uuid|Uuid.NULL}.
+     * @returns {Uuid} The ID of the new entity if successfully cloned, otherwise {@link Uuid(0)|Uuid.NULL}.
      */
     Q_INVOKABLE QUuid cloneEntity(const QUuid& entityID);
 
@@ -1438,7 +1446,7 @@ public slots:
      * Set the {@link Entities.EntityType|Web} entity that has keyboard focus.
      * @function Entities.setKeyboardFocusEntity
      * @param {Uuid} id - The ID of the {@link Entities.EntityType|Web} entity to set keyboard focus to. Use 
-     *     <code>null</code> or {@link Uuid|Uuid.NULL} to unset keyboard focus from an entity.
+     *     <code>null</code> or {@link Uuid(0)|Uuid.NULL} to unset keyboard focus from an entity.
      */
     Q_INVOKABLE void setKeyboardFocusEntity(const QUuid& id);
 
@@ -1529,7 +1537,6 @@ public slots:
      * @function Entities.emitScriptEvent
      * @param {Uuid} entityID - The ID of the {@link Entities.EntityType|Web} entity.
      * @param {string} message - The message to send.
-     * @todo <em>This function is currently not implemented.</em>
      */
     Q_INVOKABLE void emitScriptEvent(const EntityItemID& entityID, const QVariant& message);
 
@@ -1551,7 +1558,7 @@ public slots:
      * @function Entities.getMeshes
      * @param {Uuid} entityID - The ID of the <code>Model</code> or <code>PolyVox</code> entity to get the meshes of.
      * @param {Entities~getMeshesCallback} callback - The function to call upon completion.
-     * @deprecated Use the {@link Graphics} API instead.
+     * @deprecated This function is deprecated and will be removed. Use the {@link Graphics} API instead.
      */
      /**jsdoc
       * Called when {@link Entities.getMeshes} is complete.
@@ -1560,7 +1567,7 @@ public slots:
       *     <code>Model</code> or <code>PolyVox</code> entity; otherwise <code>undefined</code>. 
       * @param {boolean} success - <code>true</code> if the {@link Entities.getMeshes} call was successful, <code>false</code> 
       *     otherwise. The call may be unsuccessful if the requested entity could not be found.
-      * @deprecated Use the {@link Graphics} API instead.
+      * @deprecated This function is deprecated and will be removed. Use the {@link Graphics} API instead.
       */
     // FIXME move to a renderable entity interface
     Q_INVOKABLE void getMeshes(const QUuid& entityID, QScriptValue callback);
@@ -1763,6 +1770,7 @@ signals:
     /**jsdoc
      * Triggered on the client that is the physics simulation owner during the collision of two entities. Note: Isn't triggered 
      * for a collision with an avatar.
+     * <p>See also, {@link Script.addEventHandler}.</p>
      * @function Entities.collisionWithEntity
      * @param {Uuid} idA - The ID of one entity in the collision. For an entity script, this is the ID of the entity containing 
      *     the script.
@@ -1862,10 +1870,20 @@ signals:
      */
     void canWriteAssetsChanged(bool canWriteAssets);
 
+    /**jsdoc
+     * Triggered when your ability to get and set private user data changes.
+     * @function Entities.canGetAndSetPrivateUserDataChanged
+     * @param {boolean} canGetAndSetPrivateUserData - <code>true</code> if you can change the <code>privateUserData</code> property of an entity,
+     *     otherwise <code>false</code>.
+     * @returns {Signal}
+     */
+    void canGetAndSetPrivateUserDataChanged(bool canGetAndSetPrivateUserData);
+
 
     /**jsdoc
      * Triggered when a mouse button is clicked while the mouse cursor is on an entity, or a controller trigger is fully 
      * pressed while its laser is on an entity.
+     * <p>See also, {@link Script.addEventHandler}.</p>
      * @function Entities.mousePressOnEntity
      * @param {Uuid} entityID - The ID of the entity that was pressed.
      * @param {PointerEvent} event - Details of the event.
@@ -1890,6 +1908,7 @@ signals:
 
     /**jsdoc
      * Repeatedly triggered while the mouse cursor or controller laser moves on an entity.
+     * <p>See also, {@link Script.addEventHandler}.</p>
      * @function Entities.mouseMoveOnEntity
      * @param {Uuid} entityID - The ID of the entity that was moved on.
      * @param {PointerEvent} event - Details of the event.
@@ -1900,6 +1919,7 @@ signals:
     /**jsdoc
      * Triggered when a mouse button is released after clicking on an entity or the controller trigger is partly or fully 
      * released after pressing on an entity, even if the mouse pointer or controller laser has moved off the entity.
+     * <p>See also, {@link Script.addEventHandler}.</p>
      * @function Entities.mouseReleaseOnEntity
      * @param {Uuid} entityID - The ID of the entity that was originally pressed.
      * @param {PointerEvent} event - Details of the event.
@@ -1926,6 +1946,7 @@ signals:
 
     /**jsdoc
      * Triggered when a mouse button is clicked while the mouse cursor is on an entity. Note: Not triggered by controller.
+     * <p>See also, {@link Script.addEventHandler}.</p>
      * @function Entities.clickDownOnEntity
      * @param {Uuid} entityID - The ID of the entity that was clicked.
      * @param {PointerEvent} event - Details of the event.
@@ -1936,6 +1957,7 @@ signals:
     /**jsdoc
      * Repeatedly triggered while a mouse button continues to be held after clicking an entity, even if the mouse cursor has 
      * moved off the entity. Note: Not triggered by controller.
+     * <p>See also, {@link Script.addEventHandler}.</p>
      * @function Entities.holdingClickOnEntity
      * @param {Uuid} entityID - The ID of the entity that was originally clicked.
      * @param {PointerEvent} event - Details of the event.
@@ -1946,6 +1968,7 @@ signals:
     /**jsdoc
      * Triggered when a mouse button is released after clicking on an entity, even if the mouse cursor has moved off the 
      * entity. Note: Not triggered by controller.
+     * <p>See also, {@link Script.addEventHandler}.</p>
      * @function Entities.clickReleaseOnEntity
      * @param {Uuid} entityID - The ID of the entity that was originally clicked.
      * @param {PointerEvent} event - Details of the event.
@@ -1955,6 +1978,7 @@ signals:
 
     /**jsdoc
      * Triggered when the mouse cursor or controller laser starts hovering on an entity.
+     * <p>See also, {@link Script.addEventHandler}.</p>
      * @function Entities.hoverEnterEntity
      * @param {Uuid} entityID - The ID of the entity that is being hovered.
      * @param {PointerEvent} event - Details of the event.
@@ -1964,6 +1988,7 @@ signals:
 
     /**jsdoc
      * Repeatedly triggered when the mouse cursor or controller laser moves while hovering over an entity.
+     * <p>See also, {@link Script.addEventHandler}.</p>
      * @function Entities.hoverOverEntity
      * @param {Uuid} entityID - The ID of the entity that is being hovered.
      * @param {PointerEvent} event - Details of the event.
@@ -1973,6 +1998,7 @@ signals:
 
     /**jsdoc
      * Triggered when the mouse cursor or controller laser stops hovering over an entity.
+     * <p>See also, {@link Script.addEventHandler}.</p>
      * @function Entities.hoverLeaveEntity
      * @param {Uuid} entityID - The ID of the entity that was being hovered.
      * @param {PointerEvent} event - Details of the event.
@@ -1983,6 +2009,7 @@ signals:
 
     /**jsdoc
      * Triggered when an avatar enters an entity.
+     * <p>See also, {@link Script.addEventHandler}.</p>
      * @function Entities.enterEntity
      * @param {Uuid} entityID - The ID of the entity that the avatar entered.
      * @returns {Signal}
@@ -2016,6 +2043,7 @@ signals:
 
     /**jsdoc
      * Triggered when an avatar leaves an entity.
+     * <p>See also, {@link Script.addEventHandler}.</p>
      * @function Entities.leaveEntity
      * @param {Uuid} entityID - The ID of the entity that the avatar left.
      * @returns {Signal}

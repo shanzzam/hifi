@@ -23,7 +23,7 @@
 #include "ToolbarScriptingInterface.h"
 #include "Logging.h"
 
-#include <AudioInjector.h>
+#include <AudioInjectorManager.h>
 
 #include "SettingHandle.h"
 
@@ -212,7 +212,7 @@ void TabletScriptingInterface::playSound(TabletAudioEvents aEvent) {
         options.localOnly = true;
         options.positionSet = false;    // system sound
 
-        AudioInjectorPointer injector = AudioInjector::playSoundAndDelete(sound, options);
+        DependencyManager::get<AudioInjectorManager>()->playSound(sound, options, true);
     }
 }
 
@@ -368,6 +368,7 @@ void TabletProxy::setToolbarMode(bool toolbarMode) {
 
     if (toolbarMode) {
 #if !defined(DISABLE_QML)
+        closeDialog();
         // create new desktop window
         auto tabletRootWindow = new TabletRootWindow();
         tabletRootWindow->initQml(QVariantMap());
@@ -458,6 +459,11 @@ void TabletProxy::emitWebEvent(const QVariant& msg) {
 }
 
 void TabletProxy::onTabletShown() {
+    if (QThread::currentThread() != thread()) {
+        QMetaObject::invokeMethod(this, "onTabletShown");
+        return;
+    }
+
     if (_tabletShown) {
         Setting::Handle<bool> notificationSounds{ QStringLiteral("play_notification_sounds"), true};
         Setting::Handle<bool> notificationSoundTablet{ QStringLiteral("play_notification_sounds_tablet"), true};
@@ -485,7 +491,11 @@ bool TabletProxy::isPathLoaded(const QVariant& path) {
 }
 
 void TabletProxy::setQmlTabletRoot(OffscreenQmlSurface* qmlOffscreenSurface) {
-    Q_ASSERT(QThread::currentThread() == qApp->thread());
+    if (QThread::currentThread() != thread()) {
+        QMetaObject::invokeMethod(this, "setQmlTabletRoot", Q_ARG(OffscreenQmlSurface*, qmlOffscreenSurface));
+        return;
+    }
+
     _qmlOffscreenSurface = qmlOffscreenSurface;
     _qmlTabletRoot = qmlOffscreenSurface ? qmlOffscreenSurface->getRootItem() : nullptr;
     if (_qmlTabletRoot && _qmlOffscreenSurface) {
@@ -654,6 +664,11 @@ void TabletProxy::loadQMLSource(const QVariant& path, bool resizable) {
 }
 
 void TabletProxy::stopQMLSource() {
+    if (QThread::currentThread() != thread()) {
+        QMetaObject::invokeMethod(this, "stopQMLSource");
+        return;
+    }
+
     // For desktop toolbar mode dialogs.
     if (!_toolbarMode || !_desktopWindow) {
         qCDebug(uiLogging) << "tablet cannot clear QML because not desktop toolbar mode";
@@ -879,6 +894,12 @@ void TabletProxy::sendToQml(const QVariant& msg) {
 
 
 OffscreenQmlSurface* TabletProxy::getTabletSurface() {
+    if (QThread::currentThread() != thread()) {
+        OffscreenQmlSurface* result = nullptr;
+        BLOCKING_INVOKE_METHOD(this, "getTabletSurface", Q_RETURN_ARG(OffscreenQmlSurface*, result));
+        return result;
+    }
+
     return _qmlOffscreenSurface;
 }
 
@@ -888,6 +909,11 @@ void TabletProxy::desktopWindowClosed() {
 }
 
 void TabletProxy::unfocus() {
+    if (QThread::currentThread() != thread()) {
+        QMetaObject::invokeMethod(this, "unfocus");
+        return;
+    }
+
     if (_qmlOffscreenSurface) {
         _qmlOffscreenSurface->lowerKeyboard();
     }
@@ -943,6 +969,46 @@ const QString OBJECT_NAME_KEY = "objectName";
 const QString STABLE_ORDER_KEY = "stableOrder";
 static int s_stableOrder = 1;
 
+/**jsdoc
+ * Properties of a tablet button.
+ *
+ * @typedef {object} TabletButtonProxy.ButtonProperties
+ * 
+ * @property {Uuid} uuid - The button ID. <em>Read-only.</em>
+ * @property {Uuid} objectName - Synonym for <code>uuid</code>.
+ * @property {number} stableOrder - The order in which the button was created: each button created gets a value incremented by 
+ *     one.
+ * 
+ * @property {string} icon - The url of the default button icon displayed. (50 x 50 pixels. SVG, PNG, or other image format.) 
+ * @property {string} hoverIcon - The url of the button icon displayed when the button is hovered and not active.
+ * @property {string} activeIcon - The url of the button icon displayed when the button is active.
+ * @property {string} activeHoverIcon - The url of the button icon displayed when the button is hovered and active.
+ * @property {string} text - The button caption.
+ * @property {string} hoverText - The button caption when the button is hovered and not active.
+ * @property {string} activeText - The button caption when the button is active.
+ * @property {string} activeHoverText - The button caption when the button is hovered and active.
+ * @comment {string} defaultCaptionColor="#ffffff" - Internal property.
+ * @property {string} captionColor="#ffffff" - The color of the button caption.
+ 
+ * @property {boolean} isActive=false - <code>true</code> if the button is active, <code>false</code> if it isn't.
+ * @property {boolean} isEntered - <code>true</code> if the button is being hovered, <code>false</code> if it isn't.
+ * @property {boolean} buttonEnabled=true - <code>true</code> if the button is enabled, <code>false</code> if it is disabled.
+ * @property {number} sortOrder=100 - Determines the order of the buttons: buttons with lower numbers appear before buttons
+ *     with larger numbers.
+ *
+ * @property {boolean} inDebugMode - If <code>true</code> and the tablet is being used, the button's <code>isActive</code> 
+ *     state toggles each time the button is clicked. <em>Tablet only.</em>
+ *
+ * @comment {object} tabletRoot - Internal tablet-only property.
+ * @property {object} flickable - Internal tablet-only property.
+ * @property {object} gridView - Internal tablet-only property.
+ * @property {number} buttonIndex - Internal tablet-only property.
+ *
+ * @comment {number} imageOffOut - Internal toolbar-only property.
+ * @comment {number} imageOffIn - Internal toolbar-only property.
+ * @comment {number} imageOnOut - Internal toolbar-only property.
+ * @comment {number} imageOnIn - Internal toolbar-only property.
+ */
 TabletButtonProxy::TabletButtonProxy(const QVariantMap& properties) :
     _uuid(QUuid::createUuid()),
     _stableOrder(++s_stableOrder),
@@ -951,6 +1017,7 @@ TabletButtonProxy::TabletButtonProxy(const QVariantMap& properties) :
     _properties[UUID_KEY] = _uuid;
     _properties[OBJECT_NAME_KEY] = _uuid.toString();
     _properties[STABLE_ORDER_KEY] = _stableOrder;
+    // Other properties are defined in TabletButton.qml and ToolbarButton.qml.
     if (QThread::currentThread() != qApp->thread()) {
         qCWarning(uiLogging) << "Creating tablet button proxy on wrong thread";
     }
