@@ -29,6 +29,8 @@
 #include <VrMenu.h>
 #include <ScriptEngines.h>
 #include <MenuItemProperties.h>
+#include <ui/types/FileTypeProfile.h>
+#include <ui/types/HFWebEngineProfile.h>
 
 #include "Application.h"
 #include "AccountManager.h"
@@ -37,7 +39,6 @@
 #include "avatar/AvatarManager.h"
 #include "avatar/AvatarPackager.h"
 #include "AvatarBookmarks.h"
-#include "devices/DdeFaceTracker.h"
 #include "MainWindow.h"
 #include "render/DrawStatus.h"
 #include "scripting/MenuScriptingInterface.h"
@@ -54,6 +55,7 @@
 #include "SpeechRecognizer.h"
 #endif
 
+#include "MeshPartPayload.h"
 #include "scripting/RenderScriptingInterface.h"
 
 extern bool DEV_DECIMATE_TEXTURES;
@@ -471,6 +473,11 @@ Menu::Menu() {
     addCheckableActionToQMenuAndActionHash(renderOptionsMenu, MenuOption::ComputeBlendshapes, 0, true,
         DependencyManager::get<ModelBlender>().data(), SLOT(setComputeBlendshapes(bool)));
 
+    action = addCheckableActionToQMenuAndActionHash(renderOptionsMenu, MenuOption::MaterialProceduralShaders, 0, false);
+    connect(action, &QAction::triggered, [action] {
+        MeshPartPayload::enableMaterialProceduralShaders = action->isChecked();
+    });
+
     {
         auto drawStatusConfig = qApp->getRenderEngine()->getConfiguration()->getConfig<render::DrawStatus>("RenderMainView.DrawStatus");
         addCheckableActionToQMenuAndActionHash(renderOptionsMenu, MenuOption::HighlightTransitions, 0, false,
@@ -492,47 +499,6 @@ Menu::Menu() {
 
     // Developer > Avatar >>>
     MenuWrapper* avatarDebugMenu = developerMenu->addMenu("Avatar");
-
-    // Developer > Avatar > Face Tracking
-    MenuWrapper* faceTrackingMenu = avatarDebugMenu->addMenu("Face Tracking");
-    {
-        QActionGroup* faceTrackerGroup = new QActionGroup(avatarDebugMenu);
-
-        bool defaultNoFaceTracking = true;
-#ifdef HAVE_DDE
-        defaultNoFaceTracking = false;
-#endif
-        QAction* noFaceTracker = addCheckableActionToQMenuAndActionHash(faceTrackingMenu, MenuOption::NoFaceTracking,
-            0, defaultNoFaceTracking,
-            qApp, SLOT(setActiveFaceTracker()));
-        faceTrackerGroup->addAction(noFaceTracker);
-
-#ifdef HAVE_DDE
-        QAction* ddeFaceTracker = addCheckableActionToQMenuAndActionHash(faceTrackingMenu, MenuOption::UseCamera,
-            0, true,
-            qApp, SLOT(setActiveFaceTracker()));
-        faceTrackerGroup->addAction(ddeFaceTracker);
-#endif
-    }
-#ifdef HAVE_DDE
-    faceTrackingMenu->addSeparator();
-    QAction* binaryEyelidControl = addCheckableActionToQMenuAndActionHash(faceTrackingMenu, MenuOption::BinaryEyelidControl, 0, true);
-    binaryEyelidControl->setVisible(true);  // DDE face tracking is on by default
-    QAction* coupleEyelids = addCheckableActionToQMenuAndActionHash(faceTrackingMenu, MenuOption::CoupleEyelids, 0, true);
-    coupleEyelids->setVisible(true);  // DDE face tracking is on by default
-    QAction* useAudioForMouth = addCheckableActionToQMenuAndActionHash(faceTrackingMenu, MenuOption::UseAudioForMouth, 0, true);
-    useAudioForMouth->setVisible(true);  // DDE face tracking is on by default
-    QAction* ddeFiltering = addCheckableActionToQMenuAndActionHash(faceTrackingMenu, MenuOption::VelocityFilter, 0, true);
-    ddeFiltering->setVisible(true);  // DDE face tracking is on by default
-    QAction* ddeCalibrate = addActionToQMenuAndActionHash(faceTrackingMenu, MenuOption::CalibrateCamera, 0,
-        DependencyManager::get<DdeFaceTracker>().data(), SLOT(calibrate()));
-    ddeCalibrate->setVisible(true);  // DDE face tracking is on by default
-    faceTrackingMenu->addSeparator();
-    addCheckableActionToQMenuAndActionHash(faceTrackingMenu, MenuOption::MuteFaceTracking,
-        [](bool mute) { FaceTracker::setIsMuted(mute); },
-        Qt::CTRL | Qt::SHIFT | Qt::Key_F, FaceTracker::isMuted());
-    addCheckableActionToQMenuAndActionHash(faceTrackingMenu, MenuOption::AutoMuteAudio, 0, false);
-#endif
 
     action = addCheckableActionToQMenuAndActionHash(avatarDebugMenu, MenuOption::AvatarReceiveStats, 0, false);
     connect(action, &QAction::triggered, [this]{ Avatar::setShowReceiveStats(isOptionChecked(MenuOption::AvatarReceiveStats)); });
@@ -618,8 +584,20 @@ Menu::Menu() {
             QString("hifi/tablet/TabletNetworkingPreferences.qml"), "NetworkingPreferencesDialog");
     });
     addActionToQMenuAndActionHash(networkMenu, MenuOption::ReloadContent, 0, qApp, SLOT(reloadResourceCaches()));
-    addActionToQMenuAndActionHash(networkMenu, MenuOption::ClearDiskCache, 0,
-        DependencyManager::get<AssetClient>().data(), SLOT(clearCache()));
+
+	action = addActionToQMenuAndActionHash(networkMenu, MenuOption::ClearDiskCaches);
+    connect(action, &QAction::triggered, [] {
+        // The following caches are cleared immediately
+        DependencyManager::get<AssetClient>()->clearCache();
+#ifndef Q_OS_ANDROID
+        FileTypeProfile::clearCache();
+        HFWebEngineProfile::clearCache();
+#endif
+
+        // Clear the KTX cache on the next restart. It can't be cleared immediately because its files might be in use.
+        Setting::Handle<int>(KTXCache::SETTING_VERSION_NAME, KTXCache::INVALID_VERSION).set(KTXCache::INVALID_VERSION);
+    });
+
     addCheckableActionToQMenuAndActionHash(networkMenu,
         MenuOption::DisableActivityLogger,
         0,

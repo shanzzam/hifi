@@ -31,14 +31,14 @@ elif sys.platform == "darwin":
 def computeArchiveName(prefix):
     RELEASE_TYPE = os.getenv("RELEASE_TYPE", "DEV")
     RELEASE_NUMBER = os.getenv("RELEASE_NUMBER", "")
-    GIT_PR_COMMIT_SHORT = os.getenv("SHA7", "")
-    if GIT_PR_COMMIT_SHORT == '':
-        GIT_PR_COMMIT_SHORT = os.getenv("GIT_PR_COMMIT_SHORT", "")
+    GIT_COMMIT_SHORT = os.getenv("SHA7", "")
+    if GIT_COMMIT_SHORT == '':
+        GIT_COMMIT_SHORT = os.getenv("GIT_COMMIT_SHORT", "")
 
     if RELEASE_TYPE == "PRODUCTION":
-        BUILD_VERSION = "{}-{}".format(RELEASE_NUMBER, GIT_PR_COMMIT_SHORT)
+        BUILD_VERSION = "{}-{}".format(RELEASE_NUMBER, GIT_COMMIT_SHORT)
     elif RELEASE_TYPE == "PR":
-        BUILD_VERSION = "PR{}-{}".format(RELEASE_NUMBER, GIT_PR_COMMIT_SHORT)
+        BUILD_VERSION = "PR{}-{}".format(RELEASE_NUMBER, GIT_COMMIT_SHORT)
     else:
         BUILD_VERSION = "dev"
 
@@ -144,7 +144,7 @@ def signBuild(executablePath):
 
 
 def zipDarwinLauncher():
-    launcherSourcePath = os.path.join(SOURCE_PATH, 'launchers', sys.platform)
+    launcherSourcePath = os.path.join(SOURCE_PATH, 'launchers', 'qt')
     launcherBuildPath = os.path.join(BUILD_PATH, 'launcher')
 
     archiveName = computeArchiveName('HQ Launcher')
@@ -165,7 +165,7 @@ def zipDarwinLauncher():
 
 
 def buildLightLauncher():
-    launcherSourcePath = os.path.join(SOURCE_PATH, 'launchers', sys.platform)
+    launcherSourcePath = os.path.join(SOURCE_PATH, 'launchers', 'qt')
     launcherBuildPath = os.path.join(BUILD_PATH, 'launcher')
     if not os.path.exists(launcherBuildPath):
         os.makedirs(launcherBuildPath)

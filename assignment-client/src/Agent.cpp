@@ -376,7 +376,6 @@ void Agent::executeScript() {
         // setup an Avatar for the script to use
         auto scriptedAvatar = DependencyManager::get<ScriptableAvatar>();
         scriptedAvatar->setID(getSessionUUID());
-        scriptedAvatar->setForceFaceTrackerConnected(true);
 
         // call model URL setters with empty URLs so our avatar, if user, will have the default models
         scriptedAvatar->setSkeletonModelURL(QUrl());
@@ -400,6 +399,7 @@ void Agent::executeScript() {
                 }
 
                 // these procedural movements are included in the recordings
+                scriptedAvatar->setHasScriptedBlendshapes(true);
                 scriptedAvatar->setHasProceduralEyeFaceMovement(false);
                 scriptedAvatar->setHasProceduralBlinkFaceMovement(false);
                 scriptedAvatar->setHasAudioEnabledFaceMovement(false);
@@ -407,6 +407,7 @@ void Agent::executeScript() {
                 scriptedAvatar->clearRecordingBasis();
 
                 // restore procedural blendshape movement
+                scriptedAvatar->setHasScriptedBlendshapes(false);
                 scriptedAvatar->setHasProceduralEyeFaceMovement(true);
                 scriptedAvatar->setHasProceduralBlinkFaceMovement(true);
                 scriptedAvatar->setHasAudioEnabledFaceMovement(true);

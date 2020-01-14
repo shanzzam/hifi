@@ -110,14 +110,7 @@ void SkeletonModel::updateRig(float deltaTime, glm::mat4 parentTransform) {
     assert(!_owningAvatar->isMyAvatar());
 
     Head* head = _owningAvatar->getHead();
-
-    bool eyePosesValid = !head->getHasProceduralEyeMovement();
-    glm::vec3 lookAt;
-    if (eyePosesValid) {
-        lookAt = head->getLookAtPosition(); // don't apply no-crosseyes code etc when eyes are being tracked
-    } else {
-        lookAt = avoidCrossedEyes(head->getCorrectedLookAtPosition());
-    }
+    glm::vec3 lookAt = avoidCrossedEyes(head->getCorrectedLookAtPosition());
 
     // no need to call Model::updateRig() because otherAvatars get their joint state
     // copied directly from AvtarData::_jointData (there are no Rig animations to blend)
@@ -161,8 +154,9 @@ void SkeletonModel::updateAttitude(const glm::quat& orientation) {
 // but just before head has been simulated.
 void SkeletonModel::simulate(float deltaTime, bool fullUpdate) {
     updateAttitude(_owningAvatar->getWorldOrientation());
+    setBlendshapeCoefficients(_owningAvatar->getHead()->getSummedBlendshapeCoefficients());
+
     if (fullUpdate) {
-        setBlendshapeCoefficients(_owningAvatar->getHead()->getSummedBlendshapeCoefficients());
 
         Parent::simulate(deltaTime, fullUpdate);
 
@@ -177,7 +171,7 @@ void SkeletonModel::simulate(float deltaTime, bool fullUpdate) {
 
     // FIXME: This texture loading logic should probably live in Avatar, to mirror RenderableModelEntityItem,
     // but Avatars don't get updates in the same way
-    if (!_texturesLoaded && getGeometry() && getGeometry()->areTexturesLoaded()) {
+    if (!_texturesLoaded && getNetworkModel() && getNetworkModel()->areTexturesLoaded()) {
         _texturesLoaded = true;
         updateRenderItems();
     }
@@ -332,7 +326,7 @@ void SkeletonModel::computeBoundingShape() {
     }
 
     const HFMModel& hfmModel = getHFMModel();
-    if (hfmModel.joints.isEmpty() || _rig.indexOfJoint("Hips") == -1) {
+    if (hfmModel.joints.empty() || _rig.indexOfJoint("Hips") == -1) {
         // rootJointIndex == -1 if the avatar model has no skeleton
         return;
     }

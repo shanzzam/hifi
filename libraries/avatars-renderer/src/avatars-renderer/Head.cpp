@@ -16,7 +16,6 @@
 #include <NodeList.h>
 #include <DependencyManager.h>
 #include <GeometryUtil.h>
-#include <trackers/FaceTracker.h>
 #include <Rig.h>
 #include "Logging.h"
 
@@ -25,6 +24,22 @@
 using namespace std;
 
 static bool disableEyelidAdjustment { false };
+
+static void updateFakeCoefficients(float leftBlink, float rightBlink, float browUp,
+    float jawOpen, float mouth2, float mouth3, float mouth4, QVector<float>& coefficients) {
+
+    coefficients.resize(std::max((int)coefficients.size(), (int)Blendshapes::BlendshapeCount));
+    qFill(coefficients.begin(), coefficients.end(), 0.0f);
+    coefficients[(int)Blendshapes::EyeBlink_L] = leftBlink;
+    coefficients[(int)Blendshapes::EyeBlink_R] = rightBlink;
+    coefficients[(int)Blendshapes::BrowsU_C] = browUp;
+    coefficients[(int)Blendshapes::BrowsU_L] = browUp;
+    coefficients[(int)Blendshapes::BrowsU_R] = browUp;
+    coefficients[(int)Blendshapes::JawOpen] = jawOpen;
+    coefficients[(int)Blendshapes::MouthSmile_L] = coefficients[(int)Blendshapes::MouthSmile_R] = mouth4;
+    coefficients[(int)Blendshapes::LipsUpperClose] = mouth2;
+    coefficients[(int)Blendshapes::LipsFunnel] = mouth3;
+}
 
 Head::Head(Avatar* owningAvatar) :
     HeadData(owningAvatar),
@@ -57,7 +72,8 @@ void Head::simulate(float deltaTime) {
         _longTermAverageLoudness = glm::mix(_longTermAverageLoudness, _averageLoudness, glm::min(deltaTime / AUDIO_LONG_TERM_AVERAGING_SECS, 1.0f));
     }
 
-    if (getHasProceduralEyeMovement()) {
+    if (getProceduralAnimationFlag(HeadData::SaccadeProceduralEyeJointAnimation) &&
+        !getSuppressProceduralAnimationFlag(HeadData::SaccadeProceduralEyeJointAnimation)) {
         // Update eye saccades
         const float AVERAGE_MICROSACCADE_INTERVAL = 1.0f;
         const float AVERAGE_SACCADE_INTERVAL = 6.0f;
@@ -80,16 +96,21 @@ void Head::simulate(float deltaTime) {
     const float BLINK_START_VARIABILITY = 0.25f;
     const float FULLY_OPEN = 0.0f;
     const float FULLY_CLOSED = 1.0f;
-    if (getHasProceduralBlinkFaceMovement()) {
+    const float TALKING_LOUDNESS = 150.0f;
+
+    _timeWithoutTalking += deltaTime;
+    if ((_averageLoudness - _longTermAverageLoudness) > TALKING_LOUDNESS) {
+        _timeWithoutTalking = 0.0f;
+    }
+
+    if (getProceduralAnimationFlag(HeadData::BlinkProceduralBlendshapeAnimation) &&
+        !getSuppressProceduralAnimationFlag(HeadData::BlinkProceduralBlendshapeAnimation)) {
+
         // handle automatic blinks
         // Detect transition from talking to not; force blink after that and a delay
         bool forceBlink = false;
-        const float TALKING_LOUDNESS = 150.0f;
         const float BLINK_AFTER_TALKING = 0.25f;
-        _timeWithoutTalking += deltaTime;
-        if ((_averageLoudness - _longTermAverageLoudness) > TALKING_LOUDNESS) {
-            _timeWithoutTalking = 0.0f;
-        } else if (_timeWithoutTalking - deltaTime < BLINK_AFTER_TALKING && _timeWithoutTalking >= BLINK_AFTER_TALKING) {
+        if (_timeWithoutTalking - deltaTime < BLINK_AFTER_TALKING && _timeWithoutTalking >= BLINK_AFTER_TALKING) {
             forceBlink = true;
         }
         if (_leftEyeBlinkVelocity == 0.0f && _rightEyeBlinkVelocity == 0.0f) {
@@ -133,10 +154,13 @@ void Head::simulate(float deltaTime) {
     } else {
         _rightEyeBlink = FULLY_OPEN;
         _leftEyeBlink = FULLY_OPEN;
+        updateEyeLookAt();
     }
 
     // use data to update fake Faceshift blendshape coefficients
-    if (getHasAudioEnabledFaceMovement()) {
+    if (getProceduralAnimationFlag(HeadData::AudioProceduralBlendshapeAnimation) &&
+        !getSuppressProceduralAnimationFlag(HeadData::AudioProceduralBlendshapeAnimation)) {
+
         // Update audio attack data for facial animation (eyebrows and mouth)
         float audioAttackAveragingRate = (10.0f - deltaTime * NORMAL_HZ) / 10.0f; // --> 0.9 at 60 Hz
         _audioAttack = audioAttackAveragingRate * _audioAttack +
@@ -158,7 +182,7 @@ void Head::simulate(float deltaTime) {
         _mouthTime = 0.0f;
     }
 
-    FaceTracker::updateFakeCoefficients(
+    updateFakeCoefficients(
         _leftEyeBlink,
         _rightEyeBlink,
         _browAudioLift,
@@ -168,7 +192,9 @@ void Head::simulate(float deltaTime) {
         _mouth4,
         _transientBlendshapeCoefficients);
 
-    if (getHasProceduralEyeFaceMovement()) {
+    if (getProceduralAnimationFlag(HeadData::LidAdjustmentProceduralBlendshapeAnimation) &&
+        !getSuppressProceduralAnimationFlag(HeadData::LidAdjustmentProceduralBlendshapeAnimation)) {
+
         // This controls two things, the eye brow and the upper eye lid, it is driven by the vertical up/down angle of the
         // eyes relative to the head.  This is to try to help prevent sleepy eyes/crazy eyes.
         applyEyelidOffset(getOrientation());
@@ -252,26 +278,26 @@ void Head::applyEyelidOffset(glm::quat headOrientation) {
 
     float blinkUpCoefficient = -eyelidOffset;
     float blinkDownCoefficient = BLINK_DOWN_MULTIPLIER * eyelidOffset;
-    
+
     float openUpCoefficient = eyelidOffset;
     float openDownCoefficient = OPEN_DOWN_MULTIPLIER * eyelidOffset;
-    
+
     float browsUpCoefficient = BROW_UP_MULTIPLIER * eyelidOffset;
     float browsDownCoefficient = 0.0f;
 
     bool isLookingUp = (eyePitch > 0);
-    
+
     if (isLookingUp) {
         for (int i = 0; i < 2; i++) {
-            _transientBlendshapeCoefficients[EYE_BLINK_INDICES[i]] = blinkUpCoefficient;
-            _transientBlendshapeCoefficients[EYE_OPEN_INDICES[i]] = openUpCoefficient;
-            _transientBlendshapeCoefficients[BROWS_U_INDICES[i]] = browsUpCoefficient;
+            _transientBlendshapeCoefficients[(int)Blendshapes::EyeBlink_L + i] = blinkUpCoefficient;
+            _transientBlendshapeCoefficients[(int)Blendshapes::EyeOpen_L + i] = openUpCoefficient;
+            _transientBlendshapeCoefficients[(int)Blendshapes::BrowsU_L + i] = browsUpCoefficient;
         }
     } else {
         for (int i = 0; i < 2; i++) {
-            _transientBlendshapeCoefficients[EYE_BLINK_INDICES[i]] = blinkDownCoefficient;
-            _transientBlendshapeCoefficients[EYE_OPEN_INDICES[i]] = openDownCoefficient;
-            _transientBlendshapeCoefficients[BROWS_U_INDICES[i]] = browsDownCoefficient;
+            _transientBlendshapeCoefficients[(int)Blendshapes::EyeBlink_L + i] = blinkDownCoefficient;
+            _transientBlendshapeCoefficients[(int)Blendshapes::EyeOpen_L + i] = openDownCoefficient;
+            _transientBlendshapeCoefficients[(int)Blendshapes::BrowsU_L + i] = browsDownCoefficient;
         }
     }
 }
@@ -358,7 +384,6 @@ float Head::getFinalRoll() const {
 
 void Head::setLookAtPosition(const glm::vec3& lookAtPosition) {
     if (_isEyeLookAtUpdated && _requestLookAtPosition != lookAtPosition) {
-        _lookAtPositionChanged = usecTimestampNow();
         glm::vec3 oldAvatarLookAtVector = _requestLookAtPosition - _owningAvatar->getWorldPosition();
         glm::vec3 newAvatarLookAtVector = lookAtPosition - _owningAvatar->getWorldPosition();
         const float MIN_BLINK_ANGLE = 0.35f; // 20 degrees
@@ -369,6 +394,7 @@ void Head::setLookAtPosition(const glm::vec3& lookAtPosition) {
             _lookAtPosition = lookAtPosition;
         }
     }
+    _lookAtPositionChanged = usecTimestampNow();
     _requestLookAtPosition = lookAtPosition;
 }
 

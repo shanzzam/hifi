@@ -83,6 +83,16 @@ public:
     // find the enum value from a string, return true if match found
     static bool getOpacityMapModeFromName(const std::string& modeName, OpacityMapMode& mode);
 
+    enum CullFaceMode {
+        CULL_NONE = 0,
+        CULL_FRONT,
+        CULL_BACK,
+
+        NUM_CULL_FACE_MODES
+    };
+    static std::string getCullFaceModeName(CullFaceMode mode);
+    static bool getCullFaceModeFromName(const std::string& modeName, CullFaceMode& mode);
+
     // The signature is the Flags
     Flags _flags;
 
@@ -328,6 +338,7 @@ public:
 
     Material();
     Material(const Material& material);
+    virtual ~Material() = default;
     Material& operator= (const Material& material);
 
     const MaterialKey& getKey() const { return _key; }
@@ -347,6 +358,10 @@ public:
     static const float DEFAULT_OPACITY_CUTOFF;
     void setOpacityCutoff(float opacityCutoff);
     float getOpacityCutoff() const { return _opacityCutoff; }
+
+    static const MaterialKey::CullFaceMode DEFAULT_CULL_FACE_MODE;
+    void setCullFaceMode(MaterialKey::CullFaceMode cullFaceMode) { _cullFaceMode = cullFaceMode; }
+    MaterialKey::CullFaceMode getCullFaceMode() const { return _cullFaceMode; }
 
     void setUnlit(bool value);
     bool isUnlit() const { return _key.isUnlit(); }
@@ -402,6 +417,7 @@ public:
         TEXCOORDTRANSFORM1,
         LIGHTMAP_PARAMS,
         MATERIAL_PARAMS,
+        CULL_FACE_MODE,
 
         NUM_TOTAL_FLAGS
     };
@@ -409,11 +425,19 @@ public:
     bool getPropertyFallthrough(uint property) { return _propertyFallthroughs[property]; }
     void setPropertyDoesFallthrough(uint property) { _propertyFallthroughs[property] = true; }
 
+    virtual bool isProcedural() const { return false; }
+    virtual bool isEnabled() const { return true; }
+    virtual bool isReady() const { return true; }
+    virtual QString getProceduralString() const { return QString(); }
+
+    static const std::string HIFI_PBR;
+    static const std::string HIFI_SHADER_SIMPLE;
+
 protected:
     std::string _name { "" };
 
 private:
-    std::string _model { "hifi_pbr" };
+    std::string _model { HIFI_PBR };
     mutable MaterialKey _key { 0 };
 
     // Material properties
@@ -427,6 +451,7 @@ private:
     std::array<glm::mat4, NUM_TEXCOORD_TRANSFORMS> _texcoordTransforms;
     glm::vec2 _lightmapParams { 0.0, 1.0 };
     glm::vec2 _materialParams { 0.0, 1.0 };
+    MaterialKey::CullFaceMode _cullFaceMode { DEFAULT_CULL_FACE_MODE };
     TextureMaps _textureMaps;
 
     bool _defaultFallthrough { false };
@@ -515,6 +540,9 @@ public:
     graphics::MaterialKey getMaterialKey() const { return graphics::MaterialKey(_schemaBuffer.get<graphics::MultiMaterial::Schema>()._key); }
     const gpu::TextureTablePointer& getTextureTable() const { return _textureTable; }
 
+    void setCullFaceMode(graphics::MaterialKey::CullFaceMode cullFaceMode) { _cullFaceMode = cullFaceMode; }
+    graphics::MaterialKey::CullFaceMode getCullFaceMode() const { return _cullFaceMode; }
+
     void setNeedsUpdate(bool needsUpdate) { _needsUpdate = needsUpdate; }
     void setTexturesLoading(bool value) { _texturesLoading = value; }
     void setInitialized() { _initialized = true; }
@@ -527,6 +555,7 @@ public:
 
 private:
     gpu::BufferView _schemaBuffer;
+    graphics::MaterialKey::CullFaceMode _cullFaceMode { graphics::Material::DEFAULT_CULL_FACE_MODE };
     gpu::TextureTablePointer _textureTable { std::make_shared<gpu::TextureTable>() };
     bool _needsUpdate { false };
     bool _texturesLoading { false };

@@ -106,7 +106,7 @@
 #include <MessagesClient.h>
 #include <hfm/ModelFormatRegistry.h>
 #include <model-networking/ModelCacheScriptingInterface.h>
-#include <material-networking/MaterialCacheScriptingInterface.h>
+#include <procedural/MaterialCacheScriptingInterface.h>
 #include <material-networking/TextureCacheScriptingInterface.h>
 #include <ModelEntityItem.h>
 #include <NetworkAccessManager.h>
@@ -159,7 +159,8 @@
 #include <RenderableEntityItem.h>
 #include <RenderableTextEntityItem.h>
 #include <RenderableWebEntityItem.h>
-#include <material-networking/MaterialCache.h>
+#include <StencilMaskPass.h>
+#include <procedural/ProceduralMaterialCache.h>
 #include "recording/ClipCache.h"
 
 #include "AudioClient.h"
@@ -170,7 +171,6 @@
 #include "avatar/MyCharacterController.h"
 #include "CrashRecoveryHandler.h"
 #include "CrashHandler.h"
-#include "devices/DdeFaceTracker.h"
 #include "DiscoverabilityManager.h"
 #include "GLCanvas.h"
 #include "InterfaceDynamicFactory.h"
@@ -184,6 +184,7 @@
 #include "scripting/AssetMappingsScriptingInterface.h"
 #include "scripting/ClipboardScriptingInterface.h"
 #include "scripting/DesktopScriptingInterface.h"
+#include "scripting/ScreenshareScriptingInterface.h"
 #include "scripting/AccountServicesScriptingInterface.h"
 #include "scripting/HMDScriptingInterface.h"
 #include "scripting/MenuScriptingInterface.h"
@@ -888,11 +889,6 @@ bool setupEssentials(int& argc, char** argv, bool runningMarkerExisted) {
     DependencyManager::set<ScriptCache>();
     DependencyManager::set<SoundCache>();
     DependencyManager::set<SoundCacheScriptingInterface>();
-    
-#ifdef HAVE_DDE
-    DependencyManager::set<DdeFaceTracker>();
-#endif
-    
     DependencyManager::set<AudioClient>();
     DependencyManager::set<AudioScope>();
     DependencyManager::set<DeferredLightingEffect>();
@@ -972,6 +968,7 @@ bool setupEssentials(int& argc, char** argv, bool runningMarkerExisted) {
     DependencyManager::set<KeyboardScriptingInterface>();
     DependencyManager::set<GrabManager>();
     DependencyManager::set<AvatarPackager>();
+    DependencyManager::set<ScreenshareScriptingInterface>();
     PlatformHelper::setup();
     
     QObject::connect(PlatformHelper::instance(), &PlatformHelper::systemWillWake, [] {
@@ -1069,7 +1066,6 @@ Application::Application(int& argc, char** argv, QElapsedTimer& startupTimer, bo
     _lastSendDownstreamAudioStats(usecTimestampNow()),
     _notifiedPacketVersionMismatchThisDomain(false),
     _maxOctreePPS(maxOctreePacketsPerSecond.get()),
-    _lastFaceTrackerUpdate(0),
     _snapshotSound(nullptr),
     _sampleSound(nullptr)
 {
@@ -2019,13 +2015,6 @@ Application::Application(int& argc, char** argv, QElapsedTimer& startupTimer, bo
     this->installEventFilter(this);
 
 
-
-#ifdef HAVE_DDE
-    auto ddeTracker = DependencyManager::get<DdeFaceTracker>();
-    ddeTracker->init();
-    connect(ddeTracker.data(), &FaceTracker::muteToggled, this, &Application::faceTrackerMuteToggled);
-#endif
-
     // If launched from Steam, let it handle updates
     const QString HIFI_NO_UPDATER_COMMAND_LINE_KEY = "--no-updater";
     bool noUpdater = arguments().indexOf(HIFI_NO_UPDATER_COMMAND_LINE_KEY) != -1;
@@ -2104,7 +2093,7 @@ Application::Application(int& argc, char** argv, QElapsedTimer& startupTimer, bo
 
     EntityTreeRenderer::setAddMaterialToAvatarOperator([](const QUuid& avatarID, graphics::MaterialLayer material, const std::string& parentMaterialName) {
         auto avatarManager = DependencyManager::get<AvatarManager>();
-        auto avatar = avatarManager->getAvatarBySessionID(avatarID);
+        auto avatar = static_pointer_cast<Avatar>(avatarManager->getAvatarBySessionID(avatarID));
         if (avatar) {
             avatar->addMaterial(material, parentMaterialName);
             return true;
@@ -2113,13 +2102,32 @@ Application::Application(int& argc, char** argv, QElapsedTimer& startupTimer, bo
     });
     EntityTreeRenderer::setRemoveMaterialFromAvatarOperator([](const QUuid& avatarID, graphics::MaterialPointer material, const std::string& parentMaterialName) {
         auto avatarManager = DependencyManager::get<AvatarManager>();
-        auto avatar = avatarManager->getAvatarBySessionID(avatarID);
+        auto avatar = static_pointer_cast<Avatar>(avatarManager->getAvatarBySessionID(avatarID));
         if (avatar) {
             avatar->removeMaterial(material, parentMaterialName);
             return true;
         }
         return false;
     });
+    EntityTree::setGetUnscaledDimensionsForIDOperator([this](const QUuid& id) {
+        if (_aboutToQuit) {
+            return glm::vec3(1.0f);
+        }
+
+        auto entity = getEntities()->getEntity(id);
+        if (entity) {
+            return entity->getUnscaledDimensions();
+        }
+
+        auto avatarManager = DependencyManager::get<AvatarManager>();
+        auto avatar = static_pointer_cast<Avatar>(avatarManager->getAvatarBySessionID(id));
+        if (avatar) {
+            return avatar->getSNScale();
+        }
+        return glm::vec3(1.0f);
+    });
+    Procedural::opaqueStencil = [](gpu::StatePointer state) { PrepareStencil::testMaskDrawShape(*state); };
+    Procedural::transparentStencil = [](gpu::StatePointer state) { PrepareStencil::testMask(*state); };
 
     EntityTree::setGetEntityObjectOperator([this](const QUuid& id) -> QObject* {
         auto entities = getEntities();
@@ -2767,9 +2775,6 @@ void Application::cleanupBeforeQuit() {
     }
 
     // Stop third party processes so that they're not left running in the event of a subsequent shutdown crash.
-#ifdef HAVE_DDE
-    DependencyManager::get<DdeFaceTracker>()->setEnabled(false);
-#endif
     AnimDebugDraw::getInstance().shutdown();
 
     // FIXME: once we move to shared pointer for the INputDevice we shoud remove this naked delete:
@@ -2840,10 +2845,6 @@ void Application::cleanupBeforeQuit() {
     _window->saveGeometry();
 
     // Destroy third party processes after scripts have finished using them.
-#ifdef HAVE_DDE
-    DependencyManager::destroy<DdeFaceTracker>();
-#endif
-
     DependencyManager::destroy<ContextOverlayInterface>(); // Must be destroyed before TabletScriptingInterface
 
     // stop QML
@@ -2937,6 +2938,7 @@ Application::~Application() {
     DependencyManager::destroy<SoundCache>();
     DependencyManager::destroy<OctreeStatsProvider>();
     DependencyManager::destroy<GeometryCache>();
+    DependencyManager::destroy<ScreenshareScriptingInterface>();
 
     DependencyManager::get<ResourceManager>()->cleanup();
 
@@ -3410,6 +3412,10 @@ void Application::initializeUi() {
 
 
     setIsInterstitialMode(true);
+
+#if defined(DISABLE_QML) && defined(Q_OS_LINUX)
+    resumeAfterLoginDialogActionTaken();
+#endif
 }
 
 
@@ -3448,7 +3454,7 @@ void Application::onDesktopRootContextCreated(QQmlContext* surfaceContext) {
     surfaceContext->setContextProperty("Users", DependencyManager::get<UsersScriptingInterface>().data());
 
     surfaceContext->setContextProperty("UserActivityLogger", DependencyManager::get<UserActivityLoggerScriptingInterface>().data());
-
+    surfaceContext->setContextProperty("Screenshare", DependencyManager::get<ScreenshareScriptingInterface>().data());
     surfaceContext->setContextProperty("Camera", &_myCamera);
 
 #if defined(Q_OS_MAC) || defined(Q_OS_WIN)
@@ -3478,9 +3484,6 @@ void Application::onDesktopRootContextCreated(QQmlContext* surfaceContext) {
     surfaceContext->setContextProperty("AccountServices", AccountServicesScriptingInterface::getInstance());
 
     surfaceContext->setContextProperty("DialogsManager", _dialogsManagerScriptingInterface);
-#ifdef HAVE_DDE
-    surfaceContext->setContextProperty("FaceTracker", DependencyManager::get<DdeFaceTracker>().data());
-#endif
     surfaceContext->setContextProperty("AvatarManager", DependencyManager::get<AvatarManager>().data());
     surfaceContext->setContextProperty("LODManager", DependencyManager::get<LODManager>().data());
     surfaceContext->setContextProperty("HMD", DependencyManager::get<HMDScriptingInterface>().data());
@@ -3557,6 +3560,7 @@ void Application::userKickConfirmation(const QUuid& nodeID) {
 }
 
 void Application::setupQmlSurface(QQmlContext* surfaceContext, bool setAdditionalContextProperties) {
+    surfaceContext->setContextProperty("Screenshare", DependencyManager::get<ScreenshareScriptingInterface>().data());
     surfaceContext->setContextProperty("Users", DependencyManager::get<UsersScriptingInterface>().data());
     surfaceContext->setContextProperty("HMD", DependencyManager::get<HMDScriptingInterface>().data());
     surfaceContext->setContextProperty("UserActivityLogger", DependencyManager::get<UserActivityLoggerScriptingInterface>().data());
@@ -3745,16 +3749,6 @@ void Application::updateCamera(RenderArgs& renderArgs, float deltaTime) {
 void Application::runTests() {
     runTimingTests();
     runUnitTests();
-}
-
-void Application::faceTrackerMuteToggled() {
-
-    QAction* muteAction = Menu::getInstance()->getActionForOption(MenuOption::MuteFaceTracking);
-    Q_CHECK_PTR(muteAction);
-    bool isMuted = getSelectedFaceTracker()->isMuted();
-    muteAction->setChecked(isMuted);
-    getSelectedFaceTracker()->setEnabled(!isMuted);
-    Menu::getInstance()->getActionForOption(MenuOption::CalibrateCamera)->setEnabled(!isMuted);
 }
 
 void Application::setFieldOfView(float fov) {
@@ -4898,6 +4892,9 @@ void Application::touchEndEvent(QTouchEvent* event) {
 }
 
 void Application::touchGestureEvent(QGestureEvent* event) {
+    if (_keyboardMouseDevice->isActive()) {
+        _keyboardMouseDevice->touchGestureEvent(event);
+    }
     if (_touchscreenDevice && _touchscreenDevice->isActive()) {
         _touchscreenDevice->touchGestureEvent(event);
     }
@@ -5331,43 +5328,6 @@ ivec2 Application::getMouse() const {
     return getApplicationCompositor().getReticlePosition();
 }
 
-FaceTracker* Application::getActiveFaceTracker() {
-#ifdef HAVE_DDE
-    auto dde = DependencyManager::get<DdeFaceTracker>();
-
-    if (dde && dde->isActive()) {
-        return static_cast<FaceTracker*>(dde.data());
-    }
-#endif
-
-    return nullptr;
-}
-
-FaceTracker* Application::getSelectedFaceTracker() {
-    FaceTracker* faceTracker = nullptr;
-#ifdef HAVE_DDE
-    if (Menu::getInstance()->isOptionChecked(MenuOption::UseCamera)) {
-        faceTracker = DependencyManager::get<DdeFaceTracker>().data();
-    }
-#endif
-    return faceTracker;
-}
-
-void Application::setActiveFaceTracker() const {
-#ifdef HAVE_DDE
-    bool isMuted = Menu::getInstance()->isOptionChecked(MenuOption::MuteFaceTracking);
-    bool isUsingDDE = Menu::getInstance()->isOptionChecked(MenuOption::UseCamera);
-    Menu::getInstance()->getActionForOption(MenuOption::BinaryEyelidControl)->setVisible(isUsingDDE);
-    Menu::getInstance()->getActionForOption(MenuOption::CoupleEyelids)->setVisible(isUsingDDE);
-    Menu::getInstance()->getActionForOption(MenuOption::UseAudioForMouth)->setVisible(isUsingDDE);
-    Menu::getInstance()->getActionForOption(MenuOption::VelocityFilter)->setVisible(isUsingDDE);
-    Menu::getInstance()->getActionForOption(MenuOption::CalibrateCamera)->setVisible(isUsingDDE);
-    auto ddeTracker = DependencyManager::get<DdeFaceTracker>();
-    ddeTracker->setIsMuted(isMuted);
-    ddeTracker->setEnabled(isUsingDDE && !isMuted);
-#endif
-}
-
 bool Application::exportEntities(const QString& filename,
                                  const QVector<QUuid>& entityIDs,
                                  const glm::vec3* givenOffset) {
@@ -5723,6 +5683,7 @@ void Application::resumeAfterLoginDialogActionTaken() {
         return;
     }
 
+#if !defined(DISABLE_QML)
     if (!isHMDMode() && getDesktopTabletBecomesToolbarSetting()) {
         auto toolbar = DependencyManager::get<ToolbarScriptingInterface>()->getToolbar("com.highfidelity.interface.toolbar.system");
         toolbar->writeProperty("visible", true);
@@ -5732,6 +5693,7 @@ void Application::resumeAfterLoginDialogActionTaken() {
     }
 
     updateSystemTabletMode();
+#endif
 
     {
         auto userInputMapper = DependencyManager::get<UserInputMapper>();
@@ -5851,8 +5813,7 @@ void Application::updateMyAvatarLookAtPosition(float deltaTime) {
     PerformanceWarning warn(showWarnings, "Application::updateMyAvatarLookAtPosition()");
 
     auto myAvatar = getMyAvatar();
-    FaceTracker* faceTracker = getActiveFaceTracker();
-    myAvatar->updateEyesLookAtPosition(faceTracker, _myCamera, deltaTime);
+    myAvatar->updateEyesLookAtPosition(deltaTime);
 }
 
 void Application::updateThreads(float deltaTime) {
@@ -5883,12 +5844,7 @@ void Application::centerUI() {
 
 void Application::cycleCamera() {
     auto menu = Menu::getInstance();
-    if (menu->isOptionChecked(MenuOption::FullscreenMirror)) {
-
-        menu->setIsOptionChecked(MenuOption::FullscreenMirror, false);
-        menu->setIsOptionChecked(MenuOption::FirstPersonLookAt, true);
-
-    } else if (menu->isOptionChecked(MenuOption::FirstPersonLookAt)) {
+    if (menu->isOptionChecked(MenuOption::FirstPersonLookAt)) {
 
         menu->setIsOptionChecked(MenuOption::FirstPersonLookAt, false);
         menu->setIsOptionChecked(MenuOption::LookAtCamera, true);
@@ -5896,12 +5852,16 @@ void Application::cycleCamera() {
     } else if (menu->isOptionChecked(MenuOption::LookAtCamera)) {
 
         menu->setIsOptionChecked(MenuOption::LookAtCamera, false);
-        menu->setIsOptionChecked(MenuOption::SelfieCamera, true);
+        if (menu->getActionForOption(MenuOption::SelfieCamera)->isVisible()) {
+            menu->setIsOptionChecked(MenuOption::SelfieCamera, true);
+        } else {
+            menu->setIsOptionChecked(MenuOption::FirstPersonLookAt, true);
+        }
 
     } else if (menu->isOptionChecked(MenuOption::SelfieCamera)) {
 
         menu->setIsOptionChecked(MenuOption::SelfieCamera, false);
-        menu->setIsOptionChecked(MenuOption::FullscreenMirror, true);
+        menu->setIsOptionChecked(MenuOption::FirstPersonLookAt, true);
 
     }
     cameraMenuChanged(); // handle the menu change
@@ -6278,37 +6238,6 @@ void Application::update(float deltaTime) {
     auto myAvatar = getMyAvatar();
     {
         PerformanceTimer perfTimer("devices");
-
-        FaceTracker* tracker = getSelectedFaceTracker();
-        if (tracker && Menu::getInstance()->isOptionChecked(MenuOption::MuteFaceTracking) != tracker->isMuted()) {
-            tracker->toggleMute();
-        }
-
-        tracker = getActiveFaceTracker();
-        if (tracker && !tracker->isMuted()) {
-            tracker->update(deltaTime);
-
-            // Auto-mute microphone after losing face tracking?
-            if (tracker->isTracking()) {
-                _lastFaceTrackerUpdate = usecTimestampNow();
-            } else {
-                const quint64 MUTE_MICROPHONE_AFTER_USECS = 5000000;  //5 secs
-                Menu* menu = Menu::getInstance();
-                auto audioClient = DependencyManager::get<AudioClient>();
-                if (menu->isOptionChecked(MenuOption::AutoMuteAudio) && !audioClient->isMuted()) {
-                    if (_lastFaceTrackerUpdate > 0
-                        && ((usecTimestampNow() - _lastFaceTrackerUpdate) > MUTE_MICROPHONE_AFTER_USECS)) {
-                        audioClient->setMuted(true);
-                        _lastFaceTrackerUpdate = 0;
-                    }
-                } else {
-                    _lastFaceTrackerUpdate = 0;
-                }
-            }
-        } else {
-            _lastFaceTrackerUpdate = 0;
-        }
-
         auto userInputMapper = DependencyManager::get<UserInputMapper>();
 
         controller::HmdAvatarAlignmentType hmdAvatarAlignmentType;
@@ -6358,7 +6287,7 @@ void Application::update(float deltaTime) {
                 myAvatar->setDriveKey(MyAvatar::TRANSLATE_Z, -1.0f * userInputMapper->getActionState(controller::Action::TRANSLATE_Z));
                 myAvatar->setDriveKey(MyAvatar::TRANSLATE_Y, userInputMapper->getActionState(controller::Action::TRANSLATE_Y));
                 myAvatar->setDriveKey(MyAvatar::TRANSLATE_X, userInputMapper->getActionState(controller::Action::TRANSLATE_X));
-                if (deltaTime > FLT_EPSILON) {
+                if (deltaTime > FLT_EPSILON && userInputMapper->getActionState(controller::Action::TRANSLATE_CAMERA_Z)  == 0.0f) {
                     myAvatar->setDriveKey(MyAvatar::PITCH, -1.0f * userInputMapper->getActionState(controller::Action::PITCH));
                     myAvatar->setDriveKey(MyAvatar::YAW, -1.0f * userInputMapper->getActionState(controller::Action::YAW));
                     myAvatar->setDriveKey(MyAvatar::DELTA_PITCH, -1.0f * userInputMapper->getActionState(controller::Action::DELTA_PITCH));
@@ -7104,10 +7033,6 @@ void Application::copyDisplayViewFrustum(ViewFrustum& viewOut) const {
 // feature.  However, we still use this to reset face trackers, eye trackers, audio and to optionally re-load the avatar
 // rig and animations from scratch.
 void Application::resetSensors(bool andReload) {
-#ifdef HAVE_DDE
-    DependencyManager::get<DdeFaceTracker>()->reset();
-#endif
-
     _overlayConductor.centerUI();
     getActiveDisplayPlugin()->resetSensors();
     getMyAvatar()->reset(true, andReload);
@@ -7190,10 +7115,6 @@ void Application::clearDomainOctreeDetails(bool clearAll) {
 
     // reset the model renderer
     clearAll ? getEntities()->clear() : getEntities()->clearDomainAndNonOwnedEntities();
-
-    auto skyStage = DependencyManager::get<SceneScriptingInterface>()->getSkyStage();
-
-    skyStage->setBackgroundMode(graphics::SunSkyStage::SKY_DEFAULT);
 
     DependencyManager::get<AnimationCache>()->clearUnusedResources();
     DependencyManager::get<SoundCache>()->clearUnusedResources();
@@ -7422,6 +7343,7 @@ void Application::registerScriptEngineWithApplicationServices(const ScriptEngine
     scriptEngine->registerGlobalObject("AvatarList", DependencyManager::get<AvatarManager>().data());
 
     scriptEngine->registerGlobalObject("Camera", &_myCamera);
+    scriptEngine->registerGlobalObject("Screenshare", DependencyManager::get<ScreenshareScriptingInterface>().data());
 
 #if defined(Q_OS_MAC) || defined(Q_OS_WIN)
     scriptEngine->registerGlobalObject("SpeechRecognizer", DependencyManager::get<SpeechRecognizer>().data());
@@ -7509,13 +7431,10 @@ void Application::registerScriptEngineWithApplicationServices(const ScriptEngine
     scriptEngine->registerGlobalObject("AccountServices", AccountServicesScriptingInterface::getInstance());
     qScriptRegisterMetaType(scriptEngine.data(), DownloadInfoResultToScriptValue, DownloadInfoResultFromScriptValue);
 
-#ifdef HAVE_DDE
-    scriptEngine->registerGlobalObject("FaceTracker", DependencyManager::get<DdeFaceTracker>().data());
-#endif
-    
     scriptEngine->registerGlobalObject("AvatarManager", DependencyManager::get<AvatarManager>().data());
 
     scriptEngine->registerGlobalObject("LODManager", DependencyManager::get<LODManager>().data());
+    qScriptRegisterMetaType(scriptEngine.data(), worldDetailQualityToScriptValue, worldDetailQualityFromScriptValue);
 
     scriptEngine->registerGlobalObject("Keyboard", DependencyManager::get<KeyboardScriptingInterface>().data());
     scriptEngine->registerGlobalObject("Performance", new PerformanceScriptingInterface());

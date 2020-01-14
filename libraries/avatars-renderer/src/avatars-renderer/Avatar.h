@@ -547,8 +547,8 @@ public:
     virtual void setEnableMeshVisible(bool isEnabled);
     virtual bool getEnableMeshVisible() const;
 
-    void addMaterial(graphics::MaterialLayer material, const std::string& parentMaterialName) override;
-    void removeMaterial(graphics::MaterialPointer material, const std::string& parentMaterialName) override;
+    void addMaterial(graphics::MaterialLayer material, const std::string& parentMaterialName);
+    void removeMaterial(graphics::MaterialPointer material, const std::string& parentMaterialName);
 
     virtual scriptable::ScriptableModelBase getScriptableModel() override;
 
@@ -662,6 +662,7 @@ protected:
     std::vector<std::shared_ptr<Model>> _attachmentsToDelete;
 
     float _bodyYawDelta { 0.0f };  // degrees/sec
+    float _seatedBodyYawDelta{ 0.0f };  // degrees/renderframe
 
     // These position histories and derivatives are in the world-frame.
     // The derivatives are the MEASURED results of all external and internal forces
@@ -782,6 +783,7 @@ protected:
     render::ItemIDs _attachmentRenderIDs;
     void updateDescendantRenderIDs();
     render::ItemIDs _descendantRenderIDs;
+    std::unordered_set<EntityItemID> _renderingDescendantEntityIDs;
     uint32_t _lastAncestorChainRenderableVersion { 0 };
 };
 

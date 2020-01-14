@@ -260,6 +260,7 @@ public:
 
 signals:
     void onLoadComplete();
+    void onLoadFailed();
 
 protected:
     bool isIndexValid(int index) const { return _animSkeleton && index >= 0 && index < _animSkeleton->getNumJoints(); }
@@ -329,6 +330,7 @@ protected:
     glm::vec3 _lastForward;
     glm::vec3 _lastPosition;
     glm::vec3 _lastVelocity;
+    bool _isMovingWithMomentum{ false };
 
     QUrl _animGraphURL;
     std::shared_ptr<AnimNode> _animNode;
